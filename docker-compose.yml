@@ -1,51 +1,30 @@
 version: '3.8'
 
 services:
-  # Banco de Dados PostgreSQL
-  postgres:
-    image: postgres:15
-    container_name: ufpi_ic_api_postgres
-    environment:
-      POSTGRES_DB: ufpi_ic
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres123
-      POSTGRES_HOST_AUTH_METHOD: trust
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - api_network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ufpi_ic"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # API Flask
+  # API Flask para produção (conecta com banco externo)
   api:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: ufpi_ic_api
-    env_file:
-      - .env
+    environment:
+      # Essas variáveis serão definidas no Render ou via .env
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - DATABASE_URL=${DATABASE_URL}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - GOOGLE_GENAI_API_KEY=${GOOGLE_GENAI_API_KEY}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      - PORT=${PORT:-5000}
     ports:
-      - "5000:5000"
-    volumes:
-      - .:/app
-      - /app/__pycache__
-      - /app/venv
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - api_network
+      - "${PORT:-5000}:${PORT:-5000}"
     restart: unless-stopped
+    command: python app.py
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-5000}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
-networks:
-  api_network:
-    driver: bridge
-
-volumes:
-  postgres_data: 
+# Nota: Para desenvolvimento local com banco, use:
+# docker-compose -f docker-compose.dev.yml up --build 

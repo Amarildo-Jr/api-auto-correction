@@ -4,50 +4,73 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify
 from flask_cors import CORS
 
+# Carregar variáveis de ambiente
 load_dotenv()
 
-def create_app():
+def create_app(config_name=None):
+    """Factory function para criar a aplicação Flask"""
     app = Flask(__name__)
-    CORS(app)
-
-    # Configurações
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/exam_db')
-    app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'dev-secret-key')
-    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     
-    # Configurações adicionais do JWT
-    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = False  # Tokens não expiram
-    app.config['JWT_ERROR_MESSAGE_KEY'] = 'message'
-    app.config['JWT_HEADER_NAME'] = 'Authorization'
-    app.config['JWT_HEADER_TYPE'] = 'Bearer'
-
+    # Determinar o ambiente
+    if config_name is None:
+        config_name = os.getenv('FLASK_ENV', 'development')
+    
+    # Carregar configurações baseadas no ambiente
+    from config import config
+    app.config.from_object(config[config_name])
+    
+    # Configurar CORS
+    if hasattr(app.config, 'CORS_ORIGINS'):
+        CORS(app, origins=app.config['CORS_ORIGINS'])
+    else:
+        CORS(app)
+    
     # Inicializar extensões
     from database import db, jwt
     db.init_app(app)
     jwt.init_app(app)
-
+    
     # Registrar rotas
     from routes import register_routes
     register_routes(app)
-
-    # Handler de erro para JWT
-    @jwt.invalid_token_loader
-    def invalid_token_callback(error_string):
-        print("Token inválido:", error_string)
-        return jsonify({'message': 'Token inválido', 'error': error_string}), 401
-
-    @jwt.unauthorized_loader
-    def unauthorized_callback(error_string):
-        print("Token não fornecido:", error_string)
-        return jsonify({'message': 'Token não fornecido', 'error': error_string}), 401
-
+    
+    # Handlers de erro personalizados
+    @app.errorhandler(404)
+    def not_found(error):
+        return jsonify({'message': 'Recurso não encontrado'}), 404
+    
+    @app.errorhandler(500)
+    def internal_error(error):
+        return jsonify({'message': 'Erro interno do servidor'}), 500
+    
+    # Health check endpoint para o Render
+    @app.route('/health')
+    def health_check():
+        return jsonify({
+            'status': 'healthy',
+            'environment': config_name,
+            'database': 'connected' if db.engine else 'disconnected'
+        }), 200
+    
     return app
 
+# Para execução local
 if __name__ == '__main__':
     app = create_app()
     
+    # Criar tabelas se não existirem
     with app.app_context():
         from database import db
-        db.create_all()
+        try:
+            db.create_all()
+            print("✅ Tabelas do banco de dados criadas/verificadas com sucesso!")
+        except Exception as e:
+            print(f"❌ Erro ao criar tabelas: {e}")
     
-    app.run(debug=True, host='0.0.0.0', port=5000) 
+    # Executar aplicação
+    port = int(os.getenv('PORT', 5000))
+    app.run(
+        debug=app.config.get('DEBUG', False),
+        host='0.0.0.0',
+        port=port
+    ) 

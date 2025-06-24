@@ -1,0 +1,32 @@
+services:
+  # Aplicação Python/Flask usando Docker
+  - type: web
+    name: ufpi-ic-api
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      # Estas variáveis você deve configurar no painel do Render:
+      # - JWT_SECRET_KEY (gere uma chave forte)
+      # - GOOGLE_GENAI_API_KEY (sua chave do Google AI)
+      # - CORS_ORIGINS (domínio do seu frontend)
+      # - DATABASE_URL (será preenchida automaticamente quando conectar o PostgreSQL)
+
+databases:
+  # Banco PostgreSQL gerenciado pelo Render
+  - name: ufpi-ic-postgres
+    plan: free
+    databaseName: ufpi_ic
+    user: postgres
+    # O Render irá gerar automaticamente:
+    # - DATABASE_URL (formato: postgresql://user:pass@host:port/db)
+    # - POSTGRES_USER
+    # - POSTGRES_PASSWORD
+    # - POSTGRES_DB
+    # - POSTGRES_HOST
+    # - POSTGRES_PORT 

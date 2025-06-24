@@ -1,8 +1,9 @@
 FROM python:3.11-slim
 
+# Definir diretório de trabalho
 WORKDIR /app
 
-# Instalar dependências do sistema (cache layer separado)
+# Instalar dependências do sistema
 RUN apt-get update && apt-get install -y \
     gcc \
     libpq-dev \
@@ -10,21 +11,32 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# Copiar APENAS requirements.txt primeiro (para cache de dependências)
+# Criar usuário não-root para segurança
+RUN useradd --create-home --shell /bin/bash app
+
+# Copiar requirements.txt primeiro (para cache de dependências)
 COPY requirements.txt .
 
-# Instalar dependências Python (cache layer)
+# Instalar dependências Python
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copiar o código da aplicação (depois das dependências)
+# Copiar código da aplicação
 COPY . .
 
-# Expor a porta da aplicação
-EXPOSE 5000
+# Criar diretório para logs e dar permissões
+RUN mkdir -p /app/logs && \
+    chown -R app:app /app
 
-# Dar permissão de execução ao entrypoint
-RUN chmod +x /app/entrypoint.sh
+# Mudar para usuário não-root
+USER app
 
-# Comando para iniciar usando o entrypoint completo
-CMD ["/app/entrypoint.sh"] 
+# Expor porta (será definida via variável de ambiente)
+EXPOSE $PORT
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:$PORT/health || exit 1
+
+# Comando para iniciar a aplicação
+CMD ["python", "app.py"] 

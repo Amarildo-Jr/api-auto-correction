@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  # Banco de Dados PostgreSQL (apenas para desenvolvimento local)
+  postgres:
+    image: postgres:15
+    container_name: ufpi_ic_dev_postgres
+    environment:
+      POSTGRES_DB: ufpi_ic
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    networks:
+      - dev_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ufpi_ic"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # API Flask para desenvolvimento
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ufpi_ic_dev_api
+    environment:
+      - FLASK_ENV=development
+      - DATABASE_URL=postgresql://postgres:postgres123@postgres:5432/ufpi_ic
+      - JWT_SECRET_KEY=dev-jwt-secret-key
+      - CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app
+      - /app/__pycache__
+      - /app/venv
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - dev_network
+    restart: unless-stopped
+    command: python app.py
+
+networks:
+  dev_network:
+    driver: bridge
+
+volumes:
+  postgres_dev_data: 
