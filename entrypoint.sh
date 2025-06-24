@@ -5,7 +5,7 @@ echo "🚀 Aguardando PostgreSQL..."
 
 # Esperar PostgreSQL ficar pronto
 for i in {1..30}; do
-  if python -c "import psycopg2; psycopg2.connect(host='postgres', user='postgres', password='postgres123', dbname='ufpi_ic')" 2>/dev/null; then
+  if python -c "import psycopg2; psycopg2.connect(host='postgres', user='postgres', password='postgres123', dbname='auto_correction')" 2>/dev/null; then
     echo "✅ PostgreSQL conectado!"
     break
   fi

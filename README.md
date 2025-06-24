@@ -176,7 +176,7 @@ python init_db.py
 ```
 Host: localhost
 Port: 5432
-Database: ufpi_ic
+Database: auto_correction
 User: postgres
 Password: postgres123
 ```

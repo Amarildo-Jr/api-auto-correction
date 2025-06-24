@@ -6,7 +6,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ufpi_ic_api
+    container_name: auto_correction_api
     environment:
       # Essas variáveis serão definidas no Render ou via .env
       - FLASK_ENV=${FLASK_ENV:-production}

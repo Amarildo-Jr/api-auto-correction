@@ -1,7 +1,7 @@
 services:
   # Aplicação Python/Flask usando Docker
   - type: web
-    name: ufpi-ic-api
+    name: auto-correction-api
     env: docker
     plan: free
     dockerfilePath: ./Dockerfile
@@ -19,10 +19,9 @@ services:
 
 databases:
   # Banco PostgreSQL gerenciado pelo Render
-  - name: ufpi-ic-postgres
+  - name: db-auto-correction
     plan: free
-    databaseName: ufpi_ic
-    user: postgres
+    databaseName: auto_correction
     # O Render irá gerar automaticamente:
     # - DATABASE_URL (formato: postgresql://user:pass@host:port/db)
     # - POSTGRES_USER

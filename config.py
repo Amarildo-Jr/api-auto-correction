@@ -32,7 +32,7 @@ class DevelopmentConfig(Config):
     # Banco local - pode usar PostgreSQL local ou Docker
     SQLALCHEMY_DATABASE_URI = os.getenv(
         'DATABASE_URL', 
-        'postgresql://postgres:postgres@localhost:5432/ufpi_ic'
+        'postgresql://postgres:postgres@localhost:5432/auto_correction'
     )
     
     # CORS mais permissivo para desenvolvimento

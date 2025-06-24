@@ -4,9 +4,9 @@ services:
   # Banco de Dados PostgreSQL (apenas para desenvolvimento local)
   postgres:
     image: postgres:15
-    container_name: ufpi_ic_dev_postgres
+    container_name: auto_correction_dev_postgres
     environment:
-      POSTGRES_DB: ufpi_ic
+      POSTGRES_DB: auto_correction
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres123
       POSTGRES_HOST_AUTH_METHOD: trust
@@ -17,7 +17,7 @@ services:
     networks:
       - dev_network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ufpi_ic"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d auto_correction"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -27,10 +27,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ufpi_ic_dev_api
+    container_name: auto_correction_dev_api
     environment:
       - FLASK_ENV=development
-      - DATABASE_URL=postgresql://postgres:postgres123@postgres:5432/ufpi_ic
+      - DATABASE_URL=postgresql://postgres:postgres123@postgres:5432/auto_correction
       - JWT_SECRET_KEY=dev-jwt-secret-key
       - CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
     ports:
