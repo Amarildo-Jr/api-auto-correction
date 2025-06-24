@@ -386,10 +386,51 @@ def register_routes(app):
                     answer.points_earned = 0.0
                     continue
                 
-                # Questões dissertativas ficam pendentes de correção manual
+                # Questões dissertativas: tentar correção automática se habilitada
                 if question.question_type == 'essay':
-                    answer.points_earned = None  # Pendente de correção manual
-                    continue
+                    print(f"🔍 Processando questão dissertativa ID: {question.id}")
+                    print(f"   - auto_correction_enabled: {question.auto_correction_enabled}")
+                    print(f"   - expected_answer existe: {bool(question.expected_answer)}")
+                    print(f"   - answer_text existe: {bool(answer.answer_text)}")
+                    
+                    if question.auto_correction_enabled and question.expected_answer and answer.answer_text:
+                        # Importação local para evitar problemas de dependências não instaladas
+                        try:
+                            from auto_correction import auto_correction
+                            print(f"   - Tentando correção automática...")
+                            points_earned, similarity_score = auto_correction.auto_correct_essay(
+                                question.expected_answer, 
+                                answer.answer_text, 
+                                float(exam_question.points)
+                            )
+                            
+                            if points_earned is not None:
+                                answer.points_earned = points_earned
+                                answer.similarity_score = similarity_score
+                                answer.correction_method = 'auto'
+                                print(f"   - ✅ Correção automática: {points_earned} pontos (similaridade: {similarity_score})")
+                            else:
+                                answer.points_earned = None  # Pendente de correção manual
+                                answer.correction_method = 'pending'
+                                print(f"   - ⏳ Correção automática retornou None - ficou pendente")
+                        except ImportError as e:
+                            # Se não conseguir importar o módulo de correção automática
+                            answer.points_earned = None
+                            answer.correction_method = 'pending'
+                            print(f"   - ❌ Erro de importação: {e}")
+                        except Exception as e:
+                            # Qualquer outro erro na correção automática
+                            answer.points_earned = None
+                            answer.correction_method = 'pending'
+                            print(f"   - ❌ Erro na correção automática: {e}")
+                    else:
+                        answer.points_earned = None  # Pendente de correção manual
+                        answer.correction_method = 'pending'
+                        print(f"   - ⏳ Condições não atendidas - ficou pendente")
+                    
+                    # Se não foi corrigida automaticamente, não incluir na pontuação total
+                    if answer.points_earned is None:
+                        continue
                 
                 # Para questões objetivas, verificar se há resposta
                 if not answer.selected_alternatives:
@@ -470,6 +511,7 @@ def register_routes(app):
             enrollment.total_points = total_points
             enrollment.max_points = max_points
             enrollment.percentage = percentage
+            enrollment.completed_at = datetime.utcnow()
             
             db.session.commit()
             
@@ -520,7 +562,7 @@ def register_routes(app):
                 class_data = class_obj.to_dict()
                 
                 if user.role in ['admin', 'professor']:
-                    # Contar alunos aprovados
+                    # Contar alunos com desempenho satisfatório
                     student_count = ClassEnrollment.query.filter_by(
                         class_id=class_obj.id,
                         status='approved'
@@ -900,7 +942,7 @@ def register_routes(app):
                 questions = Question.query.filter(
                     Question.exam_id.is_(None),
                     db.or_(
-                        Question.created_by == user_id,
+                        Question.created_by == int(user_id),
                         Question.is_public == True
                     )
                 ).all()
@@ -934,7 +976,9 @@ def register_routes(app):
                 points=data.get('points', 1.0),
                 category=data.get('category'),
                 difficulty=data.get('difficulty', 'medium'),
-                is_public=data.get('is_public', True)
+                is_public=data.get('is_public', True),
+                expected_answer=data.get('expected_answer'),
+                auto_correction_enabled=data.get('auto_correction_enabled', False)
             )
             db.session.add(new_question)
             db.session.commit()
@@ -991,6 +1035,10 @@ def register_routes(app):
                 question.category = data['category']
             if 'difficulty' in data:
                 question.difficulty = data['difficulty']
+            if 'expected_answer' in data:
+                question.expected_answer = data['expected_answer']
+            if 'auto_correction_enabled' in data:
+                question.auto_correction_enabled = data['auto_correction_enabled']
             
             question.updated_at = datetime.utcnow()
             
@@ -1482,9 +1530,16 @@ def register_routes(app):
                 ExamEnrollment.status == 'completed'
             )
             
-            # Se for professor, filtrar apenas suas turmas
+            # Se for professor, filtrar por:
+            # 1. Turmas onde é instrutor OU
+            # 2. Provas que ele criou
             if user.role == 'professor':
-                query = query.filter(Class.instructor_id == user_id)
+                query = query.filter(
+                    db.or_(
+                        Class.instructor_id == int(user_id),
+                        Exam.created_by == int(user_id)
+                    )
+                )
             
             results = query.all()
             
@@ -1519,6 +1574,147 @@ def register_routes(app):
             print(f"Erro ao buscar resultados: {str(e)}")
             return jsonify({'error': 'Erro interno do servidor'}), 500
 
+    @app.route('/api/teacher/results/manual-correction', methods=['POST'])
+    @jwt_required()
+    def manual_correction():
+        """Correção manual de questões dissertativas"""
+        try:
+            user_id = get_jwt_identity()
+            user = User.query.get_or_404(user_id)
+            
+            if user.role not in ['professor', 'admin']:
+                return jsonify({'error': 'Apenas professores podem fazer correção manual'}), 403
+            
+            data = request.get_json()
+            answer_id = data.get('answer_id')
+            points_earned = data.get('points_earned')
+            
+            if not answer_id or points_earned is None:
+                return jsonify({'error': 'ID da resposta e pontuação são obrigatórios'}), 400
+            
+            # Buscar a resposta
+            answer = Answer.query.get_or_404(answer_id)
+            
+            # Verificar se o professor tem acesso a esta correção
+            enrollment = ExamEnrollment.query.get(answer.enrollment_id)
+            exam = Exam.query.get(enrollment.exam_id)
+            
+            if user.role != 'admin' and exam.created_by != int(user_id):
+                return jsonify({'error': 'Sem permissão para corrigir esta resposta'}), 403
+            
+            # Buscar a questão para validar pontuação máxima
+            exam_question = ExamQuestion.query.filter_by(
+                exam_id=enrollment.exam_id,
+                question_id=answer.question_id
+            ).first()
+            
+            if not exam_question:
+                return jsonify({'error': 'Questão não encontrada na prova'}), 404
+            
+            max_points = float(exam_question.points)
+            if points_earned < 0 or points_earned > max_points:
+                return jsonify({'error': f'Pontuação deve estar entre 0 e {max_points}'}), 400
+            
+            # Atualizar a resposta
+            answer.points_earned = points_earned
+            answer.correction_method = 'manual'
+            
+            # Recalcular pontuação total do estudante
+            total_points = 0.0
+            answers = Answer.query.filter_by(enrollment_id=enrollment.id).all()
+            
+            for ans in answers:
+                if ans.points_earned is not None:
+                    total_points += float(ans.points_earned)
+            
+            # Atualizar enrollment
+            enrollment.total_points = total_points
+            if enrollment.max_points > 0:
+                enrollment.percentage = (total_points / enrollment.max_points * 100)
+            
+            db.session.commit()
+            
+            return jsonify({
+                'message': 'Correção realizada com sucesso',
+                'answer': answer.to_dict(),
+                'new_total_points': float(total_points),
+                'new_percentage': float(enrollment.percentage)
+            }), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 422
+
+    @app.route('/api/teacher/results/pending-corrections', methods=['GET'])
+    @jwt_required()
+    def get_pending_corrections():
+        """Listar respostas dissertativas pendentes de correção"""
+        try:
+            user_id = get_jwt_identity()
+            user = User.query.get_or_404(user_id)
+            
+            if user.role not in ['professor', 'admin']:
+                return jsonify({'error': 'Apenas professores podem acessar correções'}), 403
+            
+            # Buscar provas do professor
+            if user.role == 'admin':
+                exams = Exam.query.all()
+            else:
+                exams = Exam.query.filter_by(created_by=user_id).all()
+            
+            exam_ids = [exam.id for exam in exams]
+            
+            # Buscar respostas dissertativas pendentes
+            # Incluir tanto as que não têm pontuação quanto as que têm correction_method = 'pending'
+            pending_answers = db.session.query(Answer, Question, User, Exam, ExamEnrollment)\
+                .join(Question, Answer.question_id == Question.id)\
+                .join(ExamEnrollment, Answer.enrollment_id == ExamEnrollment.id)\
+                .join(User, ExamEnrollment.student_id == User.id)\
+                .join(Exam, ExamEnrollment.exam_id == Exam.id)\
+                .filter(
+                    Question.question_type == 'essay',
+                    db.or_(
+                        Answer.correction_method == 'pending',
+                        Answer.correction_method.is_(None),
+                        Answer.points_earned.is_(None)
+                    ),
+                    Answer.answer_text.isnot(None),
+                    Answer.answer_text != '',
+                    Exam.id.in_(exam_ids)
+                ).all()
+            
+            corrections_data = []
+            for answer, question, student, exam, enrollment in pending_answers:
+                # Buscar pontuação da questão na prova
+                exam_question = ExamQuestion.query.filter_by(
+                    exam_id=exam.id,
+                    question_id=question.id
+                ).first()
+                
+                corrections_data.append({
+                    'answer_id': answer.id,
+                    'question_id': question.id,
+                    'question_text': question.question_text,
+                    'expected_answer': question.expected_answer,
+                    'student_answer': answer.answer_text,
+                    'student_name': student.name,
+                    'student_email': student.email,
+                    'exam_title': exam.title,
+                    'exam_id': exam.id,
+                    'max_points': float(exam_question.points) if exam_question else 0.0,
+                    'similarity_score': float(answer.similarity_score) if answer.similarity_score else None,
+                    'correction_method': answer.correction_method,
+                    'auto_correction_enabled': question.auto_correction_enabled,
+                    'created_at': answer.created_at.isoformat()
+                })
+            
+            return jsonify({
+                'pending_corrections': corrections_data,
+                'total_count': len(corrections_data)
+            }), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 422
+
     @app.route('/api/teacher/results/recalculate', methods=['POST'])
     @jwt_required()
     def recalculate_results():
@@ -1534,6 +1730,7 @@ def register_routes(app):
             data = request.get_json()
             exam_id = data.get('exam_id')
             student_id = data.get('student_id')
+            recorrect_essays = data.get('recorrect_essays', False)  # Nova opção
             
             if not exam_id and not student_id:
                 return jsonify({'error': 'exam_id ou student_id deve ser fornecido'}), 400
@@ -1551,8 +1748,18 @@ def register_routes(app):
                     if not exam:
                         return jsonify({'error': 'Prova não encontrada'}), 404
                     
+                    # Professor tem acesso se:
+                    # 1. É o instrutor da turma OU
+                    # 2. É o criador da prova
                     class_obj = Class.query.get(exam.class_id)
-                    if not class_obj or class_obj.instructor_id != user_id:
+                    has_access = False
+                    
+                    if class_obj and class_obj.instructor_id == int(user_id):
+                        has_access = True
+                    elif exam.created_by == int(user_id):
+                        has_access = True
+                    
+                    if not has_access:
                         return jsonify({'error': 'Acesso negado a esta prova'}), 403
             
             if student_id:
@@ -1561,7 +1768,12 @@ def register_routes(app):
                 
                 # Se for professor, verificar se tem acesso às turmas do aluno
                 if user.role == 'professor':
-                    query = query.join(Exam).join(Class).filter(Class.instructor_id == user_id)
+                    query = query.join(Exam).join(Class).filter(
+                        db.or_(
+                            Class.instructor_id == int(user_id),
+                            Exam.created_by == int(user_id)
+                        )
+                    )
             
             enrollments = query.all()
             
@@ -1660,9 +1872,37 @@ def register_routes(app):
                             answer.points_earned = 0.0
                     
                     elif question.question_type == 'essay':
-                        # Manter pontuação manual para dissertativas
-                        if answer.points_earned is None:
-                            answer.points_earned = 0.0
+                        # Para questões dissertativas
+                        if recorrect_essays and question.auto_correction_enabled and question.expected_answer and answer.answer_text:
+                            # Tentar correção automática se solicitado
+                            try:
+                                from auto_correction import auto_correction
+                                print(f"🔄 Recorrigindo questão dissertativa ID: {question.id}")
+                                points_earned, similarity_score = auto_correction.auto_correct_essay(
+                                    question.expected_answer,
+                                    answer.answer_text,
+                                    points_for_question
+                                )
+                                
+                                if points_earned is not None:
+                                    answer.points_earned = points_earned
+                                    answer.similarity_score = similarity_score
+                                    answer.correction_method = 'auto'
+                                    print(f"   - ✅ Recorreção automática: {points_earned} pontos")
+                                else:
+                                    # Se a correção automática falhar, manter valor atual ou zero
+                                    if answer.points_earned is None:
+                                        answer.points_earned = 0.0
+                                    print(f"   - ⏳ Recorreção retornou None - mantida nota atual")
+                            except Exception as e:
+                                # Em caso de erro, manter pontuação atual ou zero
+                                if answer.points_earned is None:
+                                    answer.points_earned = 0.0
+                                print(f"   - ❌ Erro na recorreção: {e}")
+                        else:
+                            # Manter pontuação manual para dissertativas
+                            if answer.points_earned is None:
+                                answer.points_earned = 0.0
                     
                     total_points += float(answer.points_earned) if answer.points_earned else 0.0
                 
@@ -1676,9 +1916,14 @@ def register_routes(app):
             # Salvar todas as alterações
             db.session.commit()
             
+            message = f'{recalculated_count} resultado(s) recalculado(s) com sucesso'
+            if recorrect_essays:
+                message += ' (incluindo recorreção automática de questões dissertativas)'
+            
             return jsonify({
-                'message': f'{recalculated_count} resultado(s) recalculado(s) com sucesso',
-                'recalculated_count': recalculated_count
+                'message': message,
+                'recalculated_count': recalculated_count,
+                'recorrected_essays': recorrect_essays
             }), 200
             
         except Exception as e:
@@ -1687,6 +1932,290 @@ def register_routes(app):
             print(f"Erro ao recalcular resultados: {str(e)}")
             print(f"Traceback: {traceback.format_exc()}")
             return jsonify({'error': f'Erro interno do servidor: {str(e)}'}), 500
+
+    # Rotas para Correção de Provas
+    @app.route('/api/teacher/correction-review', methods=['GET'])
+    @jwt_required()
+    def get_correction_review():
+        """Obter dados para página de revisão de correções"""
+        try:
+            user_id = get_jwt_identity()
+            user = User.query.get_or_404(user_id)
+            
+            # Verificar se o usuário é professor ou admin
+            if user.role not in ['professor', 'admin']:
+                return jsonify({'error': 'Acesso negado'}), 403
+            
+            # Buscar provas do professor ou todas (se admin)
+            if user.role == 'admin':
+                exams = Exam.query.filter(Exam.status == 'published').all()
+            else:
+                # Buscar provas onde:
+                # 1. Professor é instrutor da turma OU
+                # 2. Professor é criador da prova
+                classes = Class.query.filter_by(instructor_id=user_id).all()
+                class_ids = [c.id for c in classes]
+                
+                exams = Exam.query.filter(
+                                            db.or_(
+                            Exam.class_id.in_(class_ids),
+                            Exam.created_by == int(user_id)
+                        ),
+                    Exam.status == 'published'
+                ).all()
+            
+            correction_data = []
+            
+            for exam in exams:
+                # Buscar matrículas finalizadas para esta prova
+                enrollments = ExamEnrollment.query.filter_by(
+                    exam_id=exam.id,
+                    status='completed'
+                ).all()
+                
+                for enrollment in enrollments:
+                    student = User.query.get(enrollment.student_id)
+                    
+                    # Buscar respostas dissertativas pendentes ou já corrigidas
+                    essay_answers = db.session.query(Answer).join(Question).filter(
+                        Answer.enrollment_id == enrollment.id,
+                        Question.question_type == 'essay'
+                    ).all()
+                    
+                    pending_count = sum(1 for answer in essay_answers 
+                                      if answer.correction_method in ['pending', None])
+                    
+                    auto_corrected_count = sum(1 for answer in essay_answers 
+                                             if answer.correction_method == 'auto')
+                    
+                    manual_corrected_count = sum(1 for answer in essay_answers 
+                                               if answer.correction_method == 'manual')
+                    
+                    if essay_answers:  # Só incluir se houver questões dissertativas
+                        correction_data.append({
+                            'enrollment_id': enrollment.id,
+                            'exam_id': exam.id,
+                            'exam_title': exam.title,
+                            'student_id': student.id,
+                            'student_name': student.name,
+                            'student_email': student.email,
+                            'total_points': float(enrollment.total_points) if enrollment.total_points else 0.0,
+                            'max_points': float(enrollment.max_points) if enrollment.max_points else 0.0,
+                            'percentage': float(enrollment.percentage) if enrollment.percentage else 0.0,
+                            'essay_questions_count': len(essay_answers),
+                            'pending_corrections': pending_count,
+                            'auto_corrected': auto_corrected_count,
+                            'manual_corrected': manual_corrected_count,
+                            'completed_at': enrollment.completed_at.isoformat() if enrollment.completed_at else None
+                        })
+            
+            return jsonify({
+                'corrections': correction_data,
+                'total_count': len(correction_data)
+            }), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 422
+
+    @app.route('/api/teacher/student-exam/<int:enrollment_id>', methods=['GET'])
+    @jwt_required()
+    def get_student_exam_details(enrollment_id):
+        """Obter detalhes da prova de um aluno específico"""
+        try:
+            user_id = get_jwt_identity()
+            user = User.query.get_or_404(user_id)
+            
+            # Verificar se o usuário é professor ou admin
+            if user.role not in ['professor', 'admin']:
+                return jsonify({'error': 'Acesso negado'}), 403
+            
+            # Buscar matrícula
+            enrollment = ExamEnrollment.query.get_or_404(enrollment_id)
+            exam = Exam.query.get_or_404(enrollment.exam_id)
+            student = User.query.get_or_404(enrollment.student_id)
+            
+            # Verificar se o professor tem acesso a esta prova
+            if user.role == 'professor':
+                # Professor tem acesso se:
+                # 1. É o instrutor da turma da prova OU
+                # 2. É o criador da prova
+                class_obj = Class.query.get(exam.class_id)
+                has_access = False
+                
+                if class_obj and class_obj.instructor_id == int(user_id):
+                    has_access = True
+                elif exam.created_by == int(user_id):
+                    has_access = True
+                
+                if not has_access:
+                    return jsonify({'error': 'Acesso negado a esta prova'}), 403
+            
+            # Buscar todas as respostas do aluno
+            answers = Answer.query.filter_by(enrollment_id=enrollment_id).all()
+            
+            # Organizar respostas por questão
+            answers_data = []
+            for answer in answers:
+                question = Question.query.get(answer.question_id)
+                if not question:
+                    continue
+                
+                # Buscar pontuação da questão no exame
+                exam_question = ExamQuestion.query.filter_by(
+                    exam_id=exam.id,
+                    question_id=question.id
+                ).first()
+                
+                answer_data = {
+                    'id': answer.id,
+                    'question_id': question.id,
+                    'question_text': question.question_text,
+                    'question_type': question.question_type,
+                    'expected_answer': question.expected_answer,
+                    'max_points': float(exam_question.points) if exam_question else 0.0,
+                    'points_earned': float(answer.points_earned) if answer.points_earned else 0.0,
+                    'correction_method': answer.correction_method or 'pending',
+                    'similarity_score': float(answer.similarity_score) if answer.similarity_score else None,
+                    'auto_correction_enabled': question.auto_correction_enabled,
+                    'feedback': answer.feedback,
+                    'answer_text': answer.answer_text,
+                    'selected_alternatives': answer.selected_alternatives or []
+                }
+                
+                # Para questões objetivas, buscar alternativas
+                if question.question_type != 'essay':
+                    alternatives = Alternative.query.filter_by(question_id=question.id).order_by(Alternative.order_number).all()
+                    answer_data['alternatives'] = [
+                        {
+                            'id': alt.id,
+                            'text': alt.alternative_text,
+                            'is_correct': alt.is_correct,
+                            'selected': alt.id in (answer.selected_alternatives or [])
+                        }
+                        for alt in alternatives
+                    ]
+                
+                answers_data.append(answer_data)
+            
+            # Buscar informações da turma
+            class_obj = Class.query.get(exam.class_id)
+            
+            # Calcular tempo gasto (se disponível)
+            time_taken = None
+            if enrollment.completed_at and enrollment.start_time:
+                time_diff = enrollment.completed_at - enrollment.start_time
+                time_taken = int(time_diff.total_seconds() / 60)  # em minutos
+            
+            return jsonify({
+                'id': enrollment.id,
+                'student_name': student.name,
+                'student_email': student.email,
+                'exam_title': exam.title,
+                'exam_id': exam.id,
+                'class_name': class_obj.name if class_obj else 'Turma não encontrada',
+                'total_points': float(enrollment.total_points) if enrollment.total_points else 0.0,
+                'max_points': float(enrollment.max_points) if enrollment.max_points else 0.0,
+                'percentage': float(enrollment.percentage) if enrollment.percentage else 0.0,
+                'time_taken': time_taken,
+                'finished_at': enrollment.completed_at.isoformat() if enrollment.completed_at else None,
+                'status': enrollment.status,
+                'answers': answers_data
+            }), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 422
+
+    @app.route('/api/teacher/manual-correction/<int:answer_id>', methods=['POST'])
+    @jwt_required()
+    def update_manual_correction(answer_id):
+        """Atualizar correção manual de uma questão dissertativa"""
+        try:
+            user_id = get_jwt_identity()
+            user = User.query.get_or_404(user_id)
+            
+            # Verificar se o usuário é professor ou admin
+            if user.role not in ['professor', 'admin']:
+                return jsonify({'error': 'Acesso negado'}), 403
+            
+            data = request.get_json()
+            points_earned = data.get('points_earned')
+            feedback = data.get('feedback', '')
+            
+            if points_earned is None:
+                return jsonify({'error': 'points_earned é obrigatório'}), 400
+            
+            # Buscar resposta
+            answer = Answer.query.get_or_404(answer_id)
+            question = Question.query.get_or_404(answer.question_id)
+            
+            # Verificar se é questão dissertativa
+            if question.question_type != 'essay':
+                return jsonify({'error': 'Apenas questões dissertativas podem ser corrigidas manualmente'}), 400
+            
+            # Buscar matrícula e verificar acesso do professor
+            enrollment = ExamEnrollment.query.get_or_404(answer.enrollment_id)
+            exam = Exam.query.get_or_404(enrollment.exam_id)
+            
+            if user.role == 'professor':
+                # Professor tem acesso se:
+                # 1. É o instrutor da turma da prova OU
+                # 2. É o criador da prova
+                class_obj = Class.query.get(exam.class_id)
+                has_access = False
+                
+                if class_obj and class_obj.instructor_id == int(user_id):
+                    has_access = True
+                elif exam.created_by == int(user_id):
+                    has_access = True
+                
+                if not has_access:
+                    return jsonify({'error': 'Acesso negado a esta prova'}), 403
+            
+            # Buscar pontuação máxima da questão
+            exam_question = ExamQuestion.query.filter_by(
+                exam_id=exam.id,
+                question_id=question.id
+            ).first()
+            
+            max_points = float(exam_question.points) if exam_question else 0.0
+            
+            # Validar pontuação
+            if points_earned < 0 or points_earned > max_points:
+                return jsonify({'error': f'Pontuação deve estar entre 0 e {max_points}'}), 400
+            
+            # Atualizar resposta
+            answer.points_earned = points_earned
+            answer.correction_method = 'manual'
+            answer.feedback = feedback
+            
+            db.session.commit()
+            
+            # Recalcular nota total do aluno
+            answers = Answer.query.filter_by(enrollment_id=enrollment.id).all()
+            total_points = sum(float(ans.points_earned) for ans in answers if ans.points_earned is not None)
+            
+            enrollment.total_points = total_points
+            enrollment.percentage = (total_points / enrollment.max_points * 100) if enrollment.max_points > 0 else 0
+            
+            db.session.commit()
+            
+            return jsonify({
+                'message': 'Correção manual salva com sucesso',
+                'answer': {
+                    'id': answer.id,
+                    'points_earned': float(answer.points_earned),
+                    'correction_method': answer.correction_method,
+                    'feedback': answer.feedback
+                },
+                'enrollment': {
+                    'total_points': float(enrollment.total_points),
+                    'percentage': float(enrollment.percentage)
+                }
+            }), 200
+            
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'error': str(e)}), 422
 
     # Rota de Healthcheck
     @app.route('/api/test', methods=['GET'])

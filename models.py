@@ -112,6 +112,8 @@ class Question(db.Model):
     category = db.Column(db.String(100))  # Novo campo para categorizar questões
     difficulty = db.Column(db.String(20), default='medium')  # easy, medium, hard
     is_public = db.Column(db.Boolean, default=True)  # Novo campo para visibilidade
+    expected_answer = db.Column(db.Text)  # Campo para resposta esperada (gabarito do professor) para questões dissertativas
+    auto_correction_enabled = db.Column(db.Boolean, default=False)  # Campo para habilitar correção automática
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -131,6 +133,8 @@ class Question(db.Model):
             'category': self.category,
             'difficulty': self.difficulty,
             'is_public': self.is_public,
+            'expected_answer': self.expected_answer,
+            'auto_correction_enabled': self.auto_correction_enabled,
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat(),
             'alternatives': [alt.to_dict() for alt in self.alternatives]
@@ -166,6 +170,7 @@ class ExamEnrollment(db.Model):
     total_points = db.Column(db.Numeric(5,2), default=0)  # Pontuação obtida pelo estudante
     max_points = db.Column(db.Numeric(5,2), default=0)    # Pontuação máxima possível da prova
     percentage = db.Column(db.Numeric(5,2), default=0)    # Percentual de acerto
+    completed_at = db.Column(db.DateTime)  # Data/hora de finalização da prova
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     answers = db.relationship('Answer', backref='enrollment', lazy=True)
@@ -182,6 +187,7 @@ class ExamEnrollment(db.Model):
             'total_points': float(self.total_points) if self.total_points else 0,
             'max_points': float(self.max_points) if self.max_points else 0,
             'percentage': float(self.percentage) if self.percentage else 0,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
             'created_at': self.created_at.isoformat()
         }
 
@@ -194,6 +200,9 @@ class Answer(db.Model):
     answer_text = db.Column(db.Text)
     selected_alternatives = db.Column(db.JSON)  # Array de IDs das alternativas selecionadas
     points_earned = db.Column(db.Numeric(5,2))
+    similarity_score = db.Column(db.Numeric(5,2))  # Campo para armazenar o score de similaridade da correção automática
+    correction_method = db.Column(db.String(50))  # Campo para armazenar o método de correção usado (manual, auto, etc.)
+    feedback = db.Column(db.Text)  # Campo para feedback do professor na correção manual
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -204,6 +213,9 @@ class Answer(db.Model):
             'answer_text': self.answer_text,
             'selected_alternatives': self.selected_alternatives,
             'points_earned': float(self.points_earned) if self.points_earned else None,
+            'similarity_score': float(self.similarity_score) if self.similarity_score else None,
+            'correction_method': self.correction_method,
+            'feedback': self.feedback,
             'created_at': self.created_at.isoformat()
         }
 

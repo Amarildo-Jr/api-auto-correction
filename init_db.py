@@ -46,6 +46,8 @@ def apply_migrations():
             ("created_by", "INTEGER REFERENCES users(id)"),
             ("category", "VARCHAR(100)"),
             ("difficulty", "VARCHAR(20) DEFAULT 'medium'"),
+            ("expected_answer", "TEXT"),
+            ("auto_correction_enabled", "BOOLEAN DEFAULT FALSE"),
             ("created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
             ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         ]
@@ -92,15 +94,23 @@ def apply_migrations():
                 print(f"⚠️ Erro ao criar índice: {e}")
         print("✓ Índices criados/verificados para exam_questions")
         
-        # 5. Atualizar tabela answers para selected_alternatives
-        if not check_column_exists('answers', 'selected_alternatives'):
-            try:
-                db.session.execute(text("ALTER TABLE answers ADD COLUMN selected_alternatives JSONB"))
-                print("✓ Campo 'selected_alternatives' adicionado")
-            except Exception as e:
-                print(f"⚠️ Erro ao adicionar selected_alternatives: {e}")
-        else:
-            print("✓ Campo 'selected_alternatives' já existe")
+        # 5. Atualizar tabela answers para selected_alternatives e correção automática
+        answer_columns = [
+            ("selected_alternatives", "JSONB"),
+            ("similarity_score", "DECIMAL(5,2)"),
+            ("correction_method", "VARCHAR(50)"),
+            ("feedback", "TEXT")
+        ]
+        
+        for column_name, column_type in answer_columns:
+            if not check_column_exists('answers', column_name):
+                try:
+                    db.session.execute(text(f"ALTER TABLE answers ADD COLUMN {column_name} {column_type}"))
+                    print(f"✓ Campo '{column_name}' adicionado à tabela answers")
+                except Exception as e:
+                    print(f"⚠️ Erro ao adicionar {column_name}: {e}")
+            else:
+                print(f"✓ Campo '{column_name}' já existe")
         
         # 6. Migrar dados existentes de selected_alternative_id para selected_alternatives
         if check_column_exists('answers', 'selected_alternative_id'):
@@ -213,7 +223,8 @@ def apply_migrations():
         result_columns = [
             ("total_points", "DECIMAL(5,2)"),
             ("max_points", "DECIMAL(5,2)"),
-            ("percentage", "DECIMAL(5,2)")
+            ("percentage", "DECIMAL(5,2)"),
+            ("completed_at", "TIMESTAMP")
         ]
         
         for column_name, column_type in result_columns:
@@ -266,10 +277,10 @@ def create_basic_data():
     # Professores
     professors = []
     prof_data = [
-        ('prof1@ufpi.edu.br', 'Dr. João Silva', 'Matemática'),
-        ('prof2@ufpi.edu.br', 'Dra. Maria Santos', 'História'),
-        ('prof3@ufpi.edu.br', 'Dr. Carlos Oliveira', 'Ciências'),
-        ('prof4@ufpi.edu.br', 'Dra. Ana Costa', 'Programação')
+        ('prof1@exemplo.com', 'Dr. João Silva', 'Matemática'),
+        ('prof2@exemplo.com', 'Dra. Maria Santos', 'História'),
+        ('prof3@exemplo.com', 'Dr. Carlos Oliveira', 'Ciências'),
+        ('prof4@exemplo.com', 'Dra. Ana Costa', 'Programação')
     ]
     
     for email, name, subject in prof_data:
@@ -290,14 +301,14 @@ def create_basic_data():
     
     # Estudantes
     student_data = [
-        ('aluno1@ufpi.edu.br', 'Pedro Oliveira'),
-        ('aluno2@ufpi.edu.br', 'Ana Beatriz'),
-        ('aluno3@ufpi.edu.br', 'Carlos Lima'),
-        ('aluno4@ufpi.edu.br', 'Lucia Fernandes'),
-        ('aluno5@ufpi.edu.br', 'Rafael Santos'),
-        ('aluno6@ufpi.edu.br', 'Camila Silva'),
-        ('aluno7@ufpi.edu.br', 'Bruno Costa'),
-        ('aluno8@ufpi.edu.br', 'Juliana Souza')
+        ('aluno1@exemplo.com', 'Pedro Oliveira'),
+        ('aluno2@exemplo.com', 'Ana Beatriz'),
+        ('aluno3@exemplo.com', 'Carlos Lima'),
+        ('aluno4@exemplo.com', 'Lucia Fernandes'),
+        ('aluno5@exemplo.com', 'Rafael Santos'),
+        ('aluno6@exemplo.com', 'Camila Silva'),
+        ('aluno7@exemplo.com', 'Bruno Costa'),
+        ('aluno8@exemplo.com', 'Juliana Souza')
     ]
     
     for email, name in student_data:
@@ -534,6 +545,7 @@ def create_questions(admin, professors):
             'category': 'Programação',
             'difficulty': 'medium',
             'is_public': True,
+            'expected_answer': 'A programação orientada a objetos (POO) é um paradigma de programação baseado no conceito de objetos, que contêm dados (atributos) e código (métodos). Os três pilares fundamentais são: 1) Encapsulamento - ocultar detalhes internos e expor apenas interface necessária (exemplo: classe ContaBancaria com saldo privado e métodos públicos depositar/sacar); 2) Herança - capacidade de uma classe herdar características de outra (exemplo: classe Veiculo e subclasses Carro, Moto); 3) Polimorfismo - capacidade de objetos de diferentes classes responderem ao mesmo método de formas diferentes (exemplo: método calcularArea() em classes Retangulo, Circulo, Triangulo).',
             'alternatives': []
         },
         {
@@ -542,6 +554,7 @@ def create_questions(admin, professors):
             'category': 'Engenharia de Software',
             'difficulty': 'hard',
             'is_public': True,
+            'expected_answer': 'Scrum e Kanban são metodologias ágeis com abordagens diferentes. Scrum: estruturado em sprints (1-4 semanas), com papéis definidos (Product Owner, Scrum Master, Dev Team), eventos regulares (Sprint Planning, Daily, Review, Retrospective). Vantagens: previsibilidade, foco, melhoria contínua. Desvantagens: pode ser rígido, overhead de cerimônias. Kanban: fluxo contínuo, visualização do trabalho em quadros, limite de WIP (Work in Progress). Vantagens: flexibilidade, fácil implementação, melhoria gradual. Desvantagens: menos estrutura, pode faltar foco sem timeboxes. Scrum é melhor para projetos com requisitos bem definidos, Kanban para trabalhos de manutenção ou suporte.',
             'alternatives': []
         },
         {
@@ -550,6 +563,7 @@ def create_questions(admin, professors):
             'category': 'IHC',
             'difficulty': 'hard',
             'is_public': False,  # Questão privada
+            'expected_answer': 'Os 10 princípios de usabilidade de Nielsen são: 1) Visibilidade do status do sistema (feedback contínuo); 2) Correspondência entre sistema e mundo real (linguagem familiar); 3) Controle e liberdade do usuário (desfazer/refazer); 4) Consistência e padrões; 5) Prevenção de erros; 6) Reconhecimento em vez de memorização; 7) Flexibilidade e eficiência de uso; 8) Design estético e minimalista; 9) Ajudar usuários a reconhecer, diagnosticar e se recuperar de erros; 10) Ajuda e documentação. Em interfaces web modernas: usar loading indicators, breadcrumbs, botões familiares, confirmações para ações críticas, validação em tempo real, tooltips, atalhos de teclado, design limpo, mensagens de erro claras e help contextual.',
             'alternatives': []
         },
         {
@@ -558,6 +572,7 @@ def create_questions(admin, professors):
             'category': 'Banco de Dados',
             'difficulty': 'hard',
             'is_public': True,
+            'expected_answer': 'Bancos relacionais (SQL): estrutura tabular com esquema fixo, relacionamentos bem definidos, ACID completo, linguagem SQL padronizada. Adequados para: sistemas financeiros, ERP, e-commerce (transações críticas). Bancos não-relacionais (NoSQL): esquema flexível, escalabilidade horizontal, tipos variados (documento, chave-valor, coluna, grafo). Adequados para: big data, redes sociais, IoT, aplicações web de alta escala. Relacionais garantem consistência e integridade; NoSQL oferece performance e flexibilidade. Escolha depende de: volume de dados, necessidade de consistência, complexidade de relacionamentos, requisitos de escalabilidade.',
             'alternatives': []
         }
     ]
@@ -577,7 +592,9 @@ def create_questions(admin, professors):
                     points=random.choice([1.0, 1.5, 2.0, 2.5, 3.0]),
                     category=question_data['category'],
                     difficulty=question_data['difficulty'],
-                    is_public=question_data['is_public']
+                    is_public=question_data['is_public'],
+                    expected_answer=question_data.get('expected_answer'),
+                    auto_correction_enabled=question_data.get('expected_answer') is not None
                 )
             else:
                 question = Question(
@@ -697,8 +714,8 @@ def show_statistics():
     
     print("\n🔑 CREDENCIAIS DE ACESSO:")
     print("   Admin: admin@admin.com / admin123")
-    print("   Professor: prof1@ufpi.edu.br / 123456")
-    print("   Estudante: aluno1@ufpi.edu.br / 123456")
+    print("   Professor: prof1@exemplo.com / 123456")
+    print("   Estudante: aluno1@exemplo.com / 123456")
     print("\n🆕 NOVIDADES v3:")
     print("   ✓ Novos tipos de questões (Única, Múltipla, V/F, Dissertativa)")
     print("   ✓ Sistema de visibilidade (Pública/Privada)")
@@ -708,41 +725,46 @@ def show_statistics():
     print("="*60)
 
 
+def init_db_in_context():
+    """Função de inicialização para ser chamada dentro do contexto de aplicação existente"""
+    # Verificar schema do banco
+    try:
+        from sqlalchemy import text
+        result = db.session.execute(text("SELECT class_id FROM exams LIMIT 1"))
+        print("✓ Schema do banco verificado")
+    except Exception as e:
+        print(f"⚠️ Schema desatualizado: {e}")
+        print("🔄 Recriando todas as tabelas...")
+        db.drop_all()
+    
+    # Criar as tabelas
+    db.create_all()
+    print("✓ Tabelas criadas/verificadas")
+
+    # Aplicar migrações para novas funcionalidades
+    apply_migrations()
+
+    # Criar dados básicos
+    admin, professors, students = create_basic_data()
+
+    # Criar matrículas
+    create_enrollments(students)
+
+    # Criar questões do banco
+    create_questions(admin, professors)
+
+    # Criar provas
+    create_exams()
+
+    # Mostrar estatísticas
+    show_statistics()
+
+
 def init_db():
     """Função principal de inicialização"""
     app = create_app()
     with app.app_context():
-        # Verificar schema do banco
-        try:
-            from sqlalchemy import text
-            result = db.session.execute(text("SELECT class_id FROM exams LIMIT 1"))
-            print("✓ Schema do banco verificado")
-        except Exception as e:
-            print(f"⚠️ Schema desatualizado: {e}")
-            print("🔄 Recriando todas as tabelas...")
-            db.drop_all()
-        
-        # Criar as tabelas
-        db.create_all()
-        print("✓ Tabelas criadas/verificadas")
-
-        # Aplicar migrações para novas funcionalidades
-        apply_migrations()
-
-        # Criar dados básicos
-        admin, professors, students = create_basic_data()
-
-        # Criar matrículas
-        create_enrollments(students)
-
-        # Criar questões do banco
-        create_questions(admin, professors)
-
-        # Criar provas
-        create_exams()
-
-        # Mostrar estatísticas
-        show_statistics()
+        init_db_in_context()
 
 
 if __name__ == '__main__':
