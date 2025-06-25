@@ -23,18 +23,23 @@ def main():
     
     with app.app_context():
         try:
-            # Verificar se já existem usuários
-            if User.query.count() > 0:
-                print("ℹ️ Dados já existem no banco. Pulando inicialização.")
+            # Verificar se já existem dados de teste específicos
+            prof_test = User.query.filter_by(email='prof1@exemplo.com').first()
+            student_test = User.query.filter_by(email='aluno1@exemplo.com').first()
+            
+            if prof_test and student_test:
+                print("ℹ️ Dados de teste já existem no banco. Pulando inicialização.")
                 return
             
             print("📊 Executando inicialização completa do banco...")
+            print(f"   Usuários existentes: {User.query.count()}")
             
             # Importar e executar init_db_in_context
             from init_db import init_db_in_context
             init_db_in_context()
             
             print("✅ Inicialização completa!")
+            print(f"   Total de usuários após inicialização: {User.query.count()}")
             
         except Exception as e:
             print(f"❌ Erro durante a inicialização: {str(e)}")

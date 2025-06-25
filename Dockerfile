@@ -38,5 +38,9 @@ EXPOSE $PORT
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:$PORT/health || exit 1
 
+# Tornar entrypoint.sh executável e usar como comando principal
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 # Comando para iniciar a aplicação
-CMD ["python", "app.py"] 
+CMD ["./entrypoint.sh"] 
