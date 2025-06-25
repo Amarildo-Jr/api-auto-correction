@@ -2219,5 +2219,5 @@ def register_routes(app):
 
     # Rota de Healthcheck
     @app.route('/api/test', methods=['GET'])
-    def health_check():
+    def api_test():
         return jsonify({'status': 'healthy'}), 200 
