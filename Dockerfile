@@ -24,6 +24,9 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copiar código da aplicação
 COPY . .
 
+# Tornar entrypoint.sh executável (enquanto ainda somos root)
+RUN chmod +x /app/entrypoint.sh
+
 # Criar diretório para logs e dar permissões
 RUN mkdir -p /app/logs && \
     chown -R app:app /app
@@ -37,10 +40,6 @@ EXPOSE $PORT
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:$PORT/health || exit 1
-
-# Tornar entrypoint.sh executável e usar como comando principal
-COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
 
 # Comando para iniciar a aplicação
 CMD ["./entrypoint.sh"] 
