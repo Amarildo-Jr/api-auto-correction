@@ -236,18 +236,65 @@ def register_routes(app):
     # Rotas de Autenticação
     @app.route('/api/auth/login', methods=['POST'])
     def login():
+        data = request.get_json()
+        user = User.query.filter_by(email=data['email']).first()
+        if user and check_password_hash(user.password_hash, data['password']):
+            access_token = create_access_token(identity=user.id)
+            return jsonify({
+                'token': access_token,
+                'user': user.to_dict()
+            }), 200
+        return jsonify({'error': 'Credenciais inválidas'}), 401
+
+    @app.route('/api/auth/register', methods=['POST'])
+    def register():
         try:
             data = request.get_json()
-            user = User.query.filter_by(email=data['email']).first()
             
-            if user and check_password_hash(user.password_hash, data['password']):
-                user_id = str(user.id)
-                access_token = create_access_token(identity=user_id)
-                return jsonify({'token': access_token, 'user': user.to_dict()}), 200
+            # Validar campos obrigatórios
+            if not data.get('email') or not data.get('password') or not data.get('name'):
+                return jsonify({'error': 'Email, senha e nome são obrigatórios'}), 400
             
-            return jsonify({'message': 'Credenciais inválidas'}), 401
+            # Verificar se o email já existe
+            existing_user = User.query.filter_by(email=data['email']).first()
+            if existing_user:
+                return jsonify({'error': 'Email já está em uso'}), 400
+            
+            # Validar tipo de usuário
+            user_type = data.get('user_type', 'student')  # padrão é student
+            if user_type not in ['student', 'teacher']:
+                return jsonify({'error': 'Tipo de usuário inválido'}), 400
+            
+            # Mapear user_type para role
+            role_mapping = {
+                'student': 'student',
+                'teacher': 'professor'
+            }
+            role = role_mapping[user_type]
+            
+            # Criar novo usuário
+            new_user = User(
+                email=data['email'],
+                password_hash=generate_password_hash(data['password']),
+                name=data['name'],
+                role=role
+            )
+            
+            db.session.add(new_user)
+            db.session.commit()
+            
+            # Gerar token para login automático
+            access_token = create_access_token(identity=new_user.id)
+            
+            return jsonify({
+                'message': 'Usuário registrado com sucesso',
+                'token': access_token,
+                'user': new_user.to_dict()
+            }), 201
+            
         except Exception as e:
-            return jsonify({'message': 'Erro no login', 'error': str(e)}), 500
+            db.session.rollback()
+            return jsonify({'error': str(e)}), 500
 
     # Rotas de Usuário
     @app.route('/api/users', methods=['POST'])
