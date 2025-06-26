@@ -1,13 +1,235 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from database import db
 from flask import jsonify, request
 from flask_jwt_extended import (create_access_token, get_jwt_identity,
                                 jwt_required)
 from models import (Alternative, Answer, Class, ClassEnrollment, Exam,
-                    ExamEnrollment, ExamQuestion, MonitoringEvent, Question,
-                    User)
+                    ExamEnrollment, ExamQuestion, MonitoringEvent,
+                    Notification, Question, User)
 from werkzeug.security import check_password_hash, generate_password_hash
+
+
+def analyze_suspicious_behavior(events):
+    """Analisar padrões suspeitos nos eventos de monitoramento"""
+    if not events:
+        return {'risk_level': 'low', 'patterns': [], 'recommendations': []}
+    
+    patterns = []
+    risk_score = 0
+    
+    # Contar tipos de atividades suspeitas
+    activity_counts = {}
+    for event in events:
+        activity_type = event.event_data.get('activity_type', 'unknown')
+        activity_counts[activity_type] = activity_counts.get(activity_type, 0) + 1
+    
+    # Analisar padrões específicos
+    if activity_counts.get('excessive_tab_switching', 0) > 3:
+        patterns.append('Múltiplas trocas de aba detectadas')
+        risk_score += 30
+    
+    if activity_counts.get('copy_paste_attempt', 0) > 2:
+        patterns.append('Tentativas de copiar/colar detectadas')
+        risk_score += 40
+    
+    if activity_counts.get('extended_focus_loss', 0) > 2:
+        patterns.append('Períodos prolongados fora da prova')
+        risk_score += 25
+    
+    if activity_counts.get('dev_tools_attempt', 0) > 0:
+        patterns.append('Tentativas de abrir ferramentas de desenvolvedor')
+        risk_score += 50
+    
+    if activity_counts.get('right_click_attempt', 0) > 5:
+        patterns.append('Múltiplas tentativas de clique direito')
+        risk_score += 15
+    
+    # Determinar nível de risco
+    if risk_score >= 80:
+        risk_level = 'high'
+    elif risk_score >= 40:
+        risk_level = 'medium'
+    else:
+        risk_level = 'low'
+    
+    # Gerar recomendações
+    recommendations = []
+    if risk_level == 'high':
+        recommendations.append('Considere revisar esta prova manualmente')
+        recommendations.append('Entre em contato com o aluno para esclarecimentos')
+    elif risk_level == 'medium':
+        recommendations.append('Monitore este aluno mais de perto')
+        recommendations.append('Verifique as respostas com atenção extra')
+    
+    return {
+        'risk_level': risk_level,
+        'risk_score': risk_score,
+        'patterns': patterns,
+        'recommendations': recommendations,
+        'activity_counts': activity_counts,
+        'total_events': len(events)
+    }
+
+
+def determine_severity(activity_type, event_data):
+    """Determinar a severidade de uma atividade suspeita"""
+    severity_map = {
+        'copy_paste_attempt': 'high',
+        'dev_tools_attempt': 'critical',
+        'page_refresh_attempt': 'medium',
+        'excessive_tab_switching': 'medium',
+        'extended_focus_loss': 'low',
+        'right_click_attempt': 'low',
+        'text_selection': 'low',
+        'mouse_inactive': 'low'
+    }
+    
+    base_severity = severity_map.get(activity_type, 'low')
+    
+    # Ajustar severidade baseado em dados específicos
+    if activity_type == 'extended_focus_loss':
+        time_away = event_data.get('details', {}).get('time_away_seconds', 0)
+        if time_away > 120:  # Mais de 2 minutos
+            return 'medium'
+    
+    if activity_type == 'excessive_tab_switching':
+        switch_count = event_data.get('details', {}).get('switch_count', 0)
+        if switch_count > 10:
+            return 'high'
+    
+    return base_severity
+
+
+def create_notification(user_id, notification_type, title, message, data=None, priority='normal'):
+    """Criar notificação no banco de dados"""
+    try:
+        notification = Notification(
+            user_id=user_id,
+            type=notification_type,
+            title=title,
+            message=message,
+            data=data,
+            priority=priority
+        )
+        db.session.add(notification)
+        db.session.commit()
+        return notification
+    except Exception as e:
+        print(f"Erro ao criar notificação: {e}")
+        return None
+
+
+def notify_exam_reminder(exam):
+    """Criar notificações de lembrete de prova"""
+    # Buscar alunos matriculados na turma da prova
+    enrollments = ClassEnrollment.query.filter_by(
+        class_id=exam.class_id,
+        status='approved'
+    ).all()
+    
+    for enrollment in enrollments:
+        create_notification(
+            user_id=enrollment.student_id,
+            notification_type='exam_reminder',
+            title='Prova Próxima',
+            message=f'A prova "{exam.title}" começará em breve. Prepare-se!',
+            data={
+                'exam_id': exam.id,
+                'exam_title': exam.title,
+                'start_time': exam.start_time.isoformat(),
+                'duration_minutes': exam.duration_minutes
+            },
+            priority='high'
+        )
+
+
+def notify_result_available(enrollment):
+    """Notificar quando resultado estiver disponível"""
+    exam = Exam.query.get(enrollment.exam_id)
+    
+    create_notification(
+        user_id=enrollment.student_id,
+        notification_type='result_available',
+        title='Resultado Disponível',
+        message=f'O resultado da prova "{exam.title}" já está disponível.',
+        data={
+            'exam_id': exam.id,
+            'enrollment_id': enrollment.id,
+            'percentage': float(enrollment.percentage) if enrollment.percentage else 0,
+            'total_points': float(enrollment.total_points) if enrollment.total_points else 0
+        },
+        priority='normal'
+    )
+
+
+def notify_suspicious_activity(enrollment, activity_data):
+    """Notificar professor sobre atividade suspeita"""
+    exam = Exam.query.get(enrollment.exam_id)
+    student = User.query.get(enrollment.student_id)
+    
+    # Notificar o professor criador da prova
+    activity_type = activity_data.get('activity_type', 'unknown')
+    severity = determine_severity(activity_type, activity_data)
+    
+    if severity in ['high', 'critical']:
+        create_notification(
+            user_id=exam.created_by,
+            notification_type='suspicious_activity',
+            title='Atividade Suspeita Detectada',
+            message=f'Comportamento suspeito detectado: {student.name} na prova "{exam.title}"',
+            data={
+                'exam_id': exam.id,
+                'student_id': student.id,
+                'student_name': student.name,
+                'activity_type': activity_type,
+                'severity': severity,
+                'enrollment_id': enrollment.id
+            },
+            priority='high' if severity == 'high' else 'urgent'
+        )
+
+
+def notify_exam_completed(enrollment):
+    """Notificar professor quando aluno terminar prova"""
+    exam = Exam.query.get(enrollment.exam_id)
+    student = User.query.get(enrollment.student_id)
+    
+    create_notification(
+        user_id=exam.created_by,
+        notification_type='exam_completed',
+        title='Prova Finalizada',
+        message=f'{student.name} finalizou a prova "{exam.title}"',
+        data={
+            'exam_id': exam.id,
+            'student_id': student.id,
+            'student_name': student.name,
+            'enrollment_id': enrollment.id,
+            'completed_at': enrollment.completed_at.isoformat() if enrollment.completed_at else None
+        },
+        priority='normal'
+    )
+
+
+def notify_new_enrollment_request(class_enrollment):
+    """Notificar professor sobre nova solicitação de matrícula"""
+    class_obj = Class.query.get(class_enrollment.class_id)
+    student = User.query.get(class_enrollment.student_id)
+    
+    create_notification(
+        user_id=class_obj.instructor_id,
+        notification_type='enrollment_request',
+        title='Nova Solicitação de Matrícula',
+        message=f'{student.name} solicitou matrícula na turma "{class_obj.name}"',
+        data={
+            'class_id': class_obj.id,
+            'class_name': class_obj.name,
+            'student_id': student.id,
+            'student_name': student.name,
+            'enrollment_id': class_enrollment.id
+        },
+        priority='normal'
+    )
 
 
 def register_routes(app):
@@ -500,7 +722,7 @@ def register_routes(app):
             # Calcular pontuação máxima possível da prova
             max_points_result = db.session.query(
                 db.func.sum(ExamQuestion.points)
-            ).filter(ExamQuestion.exam_id == enrollment.exam_id).scalar()
+            ).filter(ExamQuestion.exam_id == enrollment.exam_id).scalar() or 0
             
             max_points = float(max_points_result) if max_points_result else 0.0
             
@@ -514,6 +736,12 @@ def register_routes(app):
             enrollment.completed_at = datetime.utcnow()
             
             db.session.commit()
+            
+            # Notificar professor sobre conclusão da prova
+            notify_exam_completed(enrollment)
+            
+            # Notificar aluno sobre resultado disponível
+            notify_result_available(enrollment)
             
             # Retornar resultado com pontuação
             result = enrollment.to_dict()
@@ -536,7 +764,114 @@ def register_routes(app):
         )
         db.session.add(new_event)
         db.session.commit()
+        
+        # Se for atividade suspeita, notificar o professor
+        if data['event_type'] == 'suspicious_activity':
+            enrollment = ExamEnrollment.query.get(data['enrollment_id'])
+            if enrollment:
+                notify_suspicious_activity(enrollment, data['event_data'])
+        
         return jsonify(new_event.to_dict()), 201
+
+    @app.route('/api/monitoring/suspicious-activities/<int:enrollment_id>', methods=['GET'])
+    @jwt_required()
+    def get_suspicious_activities(enrollment_id):
+        """Obter atividades suspeitas de uma matrícula específica"""
+        try:
+            user_id = get_jwt_identity()
+            user = User.query.get_or_404(user_id)
+            
+            # Verificar se o usuário tem permissão
+            enrollment = ExamEnrollment.query.get_or_404(enrollment_id)
+            exam = Exam.query.get_or_404(enrollment.exam_id)
+            
+            if user.role not in ['admin', 'professor']:
+                return jsonify({'error': 'Acesso negado'}), 403
+            
+            if user.role == 'professor' and exam.created_by != int(user_id):
+                return jsonify({'error': 'Sem permissão para ver este monitoramento'}), 403
+            
+            # Buscar eventos suspeitos
+            suspicious_events = MonitoringEvent.query.filter_by(
+                enrollment_id=enrollment_id,
+                event_type='suspicious_activity'
+            ).order_by(MonitoringEvent.created_at.desc()).all()
+            
+            # Analisar padrões suspeitos
+            analysis = analyze_suspicious_behavior(suspicious_events)
+            
+            return jsonify({
+                'enrollment_id': enrollment_id,
+                'suspicious_events': [event.to_dict() for event in suspicious_events],
+                'analysis': analysis
+            }), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 422
+
+    @app.route('/api/monitoring/dashboard-alerts', methods=['GET'])
+    @jwt_required()
+    def get_dashboard_alerts():
+        """Obter alertas para o dashboard do professor"""
+        try:
+            user_id = get_jwt_identity()
+            user = User.query.get_or_404(user_id)
+            
+            if user.role not in ['admin', 'professor']:
+                return jsonify({'error': 'Acesso negado'}), 403
+            
+            # Buscar provas do professor
+            if user.role == 'admin':
+                exams = Exam.query.all()
+            else:
+                exams = Exam.query.filter_by(created_by=int(user_id)).all()
+            
+            exam_ids = [exam.id for exam in exams]
+            
+            # Buscar matrículas das provas do professor
+            enrollments = ExamEnrollment.query.filter(
+                ExamEnrollment.exam_id.in_(exam_ids),
+                ExamEnrollment.status == 'in_progress'
+            ).all()
+            
+            enrollment_ids = [e.id for e in enrollments]
+            
+            # Buscar eventos suspeitos recentes (últimas 24 horas)
+            recent_cutoff = datetime.utcnow() - timedelta(hours=24)
+            
+            recent_suspicious = MonitoringEvent.query.filter(
+                MonitoringEvent.enrollment_id.in_(enrollment_ids),
+                MonitoringEvent.event_type == 'suspicious_activity',
+                MonitoringEvent.created_at >= recent_cutoff
+            ).order_by(MonitoringEvent.created_at.desc()).limit(10).all()
+            
+            # Preparar alertas
+            alerts = []
+            for event in recent_suspicious:
+                enrollment = ExamEnrollment.query.get(event.enrollment_id)
+                exam = Exam.query.get(enrollment.exam_id)
+                student = User.query.get(enrollment.student_id)
+                
+                activity_type = event.event_data.get('activity_type', 'unknown')
+                severity = determine_severity(activity_type, event.event_data)
+                
+                alerts.append({
+                    'id': event.id,
+                    'student_name': student.name,
+                    'exam_title': exam.title,
+                    'activity_type': activity_type,
+                    'severity': severity,
+                    'created_at': event.created_at.isoformat(),
+                    'details': event.event_data
+                })
+            
+            return jsonify({
+                'alerts': alerts,
+                'total_count': len(recent_suspicious)
+            }), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 422
 
     # Rotas de Turmas
     @app.route('/api/classes', methods=['GET'])
@@ -2221,3 +2556,198 @@ def register_routes(app):
     @app.route('/api/test', methods=['GET'])
     def api_test():
         return jsonify({'status': 'healthy'}), 200 
+
+    @app.route('/api/monitoring/exam-stats/<int:exam_id>', methods=['GET'])
+    @jwt_required()
+    def get_exam_monitoring_stats(exam_id):
+        """Obter estatísticas de monitoramento de uma prova específica"""
+        try:
+            user_id = get_jwt_identity()
+            user = User.query.get_or_404(user_id)
+            
+            # Verificar se o usuário tem permissão
+            exam = Exam.query.get_or_404(exam_id)
+            
+            if user.role not in ['admin', 'professor']:
+                return jsonify({'error': 'Acesso negado'}), 403
+            
+            if user.role == 'professor' and exam.created_by != int(user_id):
+                return jsonify({'error': 'Sem permissão para ver este monitoramento'}), 403
+            
+            # Buscar todas as matrículas da prova
+            enrollments = ExamEnrollment.query.filter_by(exam_id=exam_id).all()
+            enrollment_ids = [e.id for e in enrollments]
+            
+            # Buscar todos os eventos de monitoramento
+            all_events = MonitoringEvent.query.filter(
+                MonitoringEvent.enrollment_id.in_(enrollment_ids)
+            ).all()
+            
+            # Buscar eventos suspeitos
+            suspicious_events = [e for e in all_events if e.event_type == 'suspicious_activity']
+            
+            # Estatísticas por aluno
+            student_stats = {}
+            for enrollment in enrollments:
+                student = User.query.get(enrollment.student_id)
+                student_events = [e for e in suspicious_events if e.enrollment_id == enrollment.id]
+                analysis = analyze_suspicious_behavior(student_events)
+                
+                student_stats[enrollment.id] = {
+                    'student_id': enrollment.student_id,
+                    'student_name': student.name,
+                    'enrollment_id': enrollment.id,
+                    'total_events': len(student_events),
+                    'risk_level': analysis['risk_level'],
+                    'risk_score': analysis['risk_score'],
+                    'patterns': analysis['patterns'],
+                    'activity_counts': analysis['activity_counts']
+                }
+            
+            # Estatísticas gerais da prova
+            total_suspicious = len(suspicious_events)
+            high_risk_students = len([s for s in student_stats.values() if s['risk_level'] == 'high'])
+            medium_risk_students = len([s for s in student_stats.values() if s['risk_level'] == 'medium'])
+            
+            return jsonify({
+                'exam_id': exam_id,
+                'exam_title': exam.title,
+                'total_students': len(enrollments),
+                'total_suspicious_events': total_suspicious,
+                'high_risk_students': high_risk_students,
+                'medium_risk_students': medium_risk_students,
+                'student_stats': student_stats,
+                'overall_risk_level': 'high' if high_risk_students > 0 else 'medium' if medium_risk_students > 0 else 'low'
+            }), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 422
+
+    # Rotas de Notificações
+    @app.route('/api/notifications', methods=['GET'])
+    @jwt_required()
+    def get_notifications():
+        """Obter notificações do usuário atual"""
+        try:
+            user_id = get_jwt_identity()
+            
+            # Filtros opcionais
+            limit = request.args.get('limit', 20, type=int)
+            unread_only = request.args.get('unread_only', 'false').lower() == 'true'
+            
+            query = Notification.query.filter_by(user_id=user_id)
+            
+            if unread_only:
+                query = query.filter_by(is_read=False)
+            
+            notifications = query.order_by(Notification.created_at.desc()).limit(limit).all()
+            
+            # Contar não lidas
+            unread_count = Notification.query.filter_by(user_id=user_id, is_read=False).count()
+            
+            return jsonify({
+                'notifications': [n.to_dict() for n in notifications],
+                'unread_count': unread_count,
+                'total_count': len(notifications)
+            }), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 422
+
+    @app.route('/api/notifications', methods=['POST'])
+    @jwt_required()
+    def create_notification():
+        """Criar nova notificação"""
+        try:
+            user_id = get_jwt_identity()
+            user = User.query.get_or_404(user_id)
+            
+            # Apenas admins e professores podem criar notificações para outros usuários
+            if user.role not in ['admin', 'professor']:
+                return jsonify({'error': 'Sem permissão para criar notificações'}), 403
+            
+            data = request.get_json()
+            
+            notification = Notification(
+                user_id=data['user_id'],
+                type=data['type'],
+                title=data['title'],
+                message=data['message'],
+                data=data.get('data'),
+                priority=data.get('priority', 'normal')
+            )
+            
+            db.session.add(notification)
+            db.session.commit()
+            
+            return jsonify(notification.to_dict()), 201
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 422
+
+    @app.route('/api/notifications/<int:notification_id>/read', methods=['PATCH'])
+    @jwt_required()
+    def mark_notification_read(notification_id):
+        """Marcar notificação como lida"""
+        try:
+            user_id = get_jwt_identity()
+            
+            notification = Notification.query.filter_by(
+                id=notification_id,
+                user_id=user_id
+            ).first_or_404()
+            
+            notification.is_read = True
+            notification.read_at = datetime.utcnow()
+            
+            db.session.commit()
+            
+            return jsonify(notification.to_dict()), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 422
+
+    @app.route('/api/notifications/mark-all-read', methods=['PATCH'])
+    @jwt_required()
+    def mark_all_notifications_read():
+        """Marcar todas as notificações como lidas"""
+        try:
+            user_id = get_jwt_identity()
+            
+            notifications = Notification.query.filter_by(
+                user_id=user_id,
+                is_read=False
+            ).all()
+            
+            for notification in notifications:
+                notification.is_read = True
+                notification.read_at = datetime.utcnow()
+            
+            db.session.commit()
+            
+            return jsonify({
+                'message': f'{len(notifications)} notificações marcadas como lidas'
+            }), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 422
+
+    @app.route('/api/notifications/<int:notification_id>', methods=['DELETE'])
+    @jwt_required()
+    def delete_notification(notification_id):
+        """Excluir notificação"""
+        try:
+            user_id = get_jwt_identity()
+            
+            notification = Notification.query.filter_by(
+                id=notification_id,
+                user_id=user_id
+            ).first_or_404()
+            
+            db.session.delete(notification)
+            db.session.commit()
+            
+            return jsonify({'message': 'Notificação excluída com sucesso'}), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 422

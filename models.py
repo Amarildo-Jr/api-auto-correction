@@ -257,4 +257,35 @@ class ExamQuestion(db.Model):
             'order_number': self.order_number,
             'question_snapshot': self.question_snapshot,
             'created_at': self.created_at.isoformat()
+        }
+
+class Notification(db.Model):
+    __tablename__ = 'notifications'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    type = db.Column(db.String(50), nullable=False)  # exam_reminder, result_available, suspicious_activity, etc.
+    title = db.Column(db.String(255), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    data = db.Column(db.JSON)  # Dados adicionais específicos do tipo de notificação
+    is_read = db.Column(db.Boolean, default=False)
+    priority = db.Column(db.String(20), default='normal')  # low, normal, high, urgent
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    read_at = db.Column(db.DateTime)
+
+    # Relacionamento com usuário
+    user = db.relationship('User', backref='notifications')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'type': self.type,
+            'title': self.title,
+            'message': self.message,
+            'data': self.data,
+            'is_read': self.is_read,
+            'priority': self.priority,
+            'created_at': self.created_at.isoformat(),
+            'read_at': self.read_at.isoformat() if self.read_at else None
         } 
