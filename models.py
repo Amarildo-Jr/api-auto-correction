@@ -257,7 +257,7 @@ class ExamQuestion(db.Model):
             'order_number': self.order_number,
             'question_snapshot': self.question_snapshot,
             'created_at': self.created_at.isoformat()
-        }
+        } 
 
 class Notification(db.Model):
     __tablename__ = 'notifications'
