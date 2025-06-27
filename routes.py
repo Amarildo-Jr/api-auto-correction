@@ -1,14 +1,17 @@
+import secrets
 from datetime import datetime, timedelta
 
 from database import db
 from flask import jsonify, request
-from flask_jwt_extended import (create_access_token, get_jwt_identity,
-                                jwt_required)
+from flask_jwt_extended import (create_access_token, create_refresh_token,
+                                get_jwt, get_jwt_identity, jwt_required)
 from models import (Alternative, Answer, Class, ClassEnrollment, Exam,
                     ExamEnrollment, ExamQuestion, MonitoringEvent,
                     Notification, Question, User)
 from werkzeug.security import check_password_hash, generate_password_hash
 
+# Armazenar refresh tokens válidos (em produção, usar Redis)
+valid_refresh_tokens = set()
 
 def analyze_suspicious_behavior(events):
     """Analisar padrões suspeitos nos eventos de monitoramento"""
@@ -236,15 +239,110 @@ def register_routes(app):
     # Rotas de Autenticação
     @app.route('/api/auth/login', methods=['POST'])
     def login():
-        data = request.get_json()
-        user = User.query.filter_by(email=data['email']).first()
-        if user and check_password_hash(user.password_hash, data['password']):
-            access_token = create_access_token(identity=user.id)
+        try:
+            data = request.get_json()
+            user = User.query.filter_by(email=data['email']).first()
+            
+            if user and check_password_hash(user.password_hash, data['password']):
+                # Criar access token com tempo curto (15 minutos)
+                access_token = create_access_token(
+                    identity=user.id,
+                    expires_delta=timedelta(minutes=15)
+                )
+                
+                # Criar refresh token com tempo longo (7 dias)
+                refresh_token = create_refresh_token(
+                    identity=user.id,
+                    expires_delta=timedelta(days=7)
+                )
+                
+                # Armazenar refresh token como válido
+                valid_refresh_tokens.add(refresh_token)
+                
+                return jsonify({
+                    'token': access_token,
+                    'refresh_token': refresh_token,
+                    'expires_in': 900,  # 15 minutos em segundos
+                    'user': user.to_dict()
+                }), 200
+                
+            return jsonify({'error': 'Credenciais inválidas'}), 401
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/auth/refresh', methods=['POST'])
+    def refresh_token():
+        try:
+            data = request.get_json()
+            refresh_token = data.get('refresh_token')
+            
+            if not refresh_token:
+                return jsonify({'error': 'Refresh token é obrigatório'}), 400
+            
+            # Verificar se o refresh token está na lista de válidos
+            if refresh_token not in valid_refresh_tokens:
+                return jsonify({'error': 'Refresh token inválido'}), 401
+            
+            # Decodificar o refresh token para obter o user_id
+            from flask_jwt_extended import decode_token
+            try:
+                decoded_token = decode_token(refresh_token)
+                user_id = decoded_token['sub']
+            except Exception:
+                # Remover token inválido
+                valid_refresh_tokens.discard(refresh_token)
+                return jsonify({'error': 'Refresh token expirado ou inválido'}), 401
+            
+            # Verificar se o usuário ainda existe
+            user = User.query.get(user_id)
+            if not user:
+                valid_refresh_tokens.discard(refresh_token)
+                return jsonify({'error': 'Usuário não encontrado'}), 401
+            
+            # Remover o refresh token antigo
+            valid_refresh_tokens.discard(refresh_token)
+            
+            # Criar novos tokens
+            new_access_token = create_access_token(
+                identity=user.id,
+                expires_delta=timedelta(minutes=15)
+            )
+            
+            new_refresh_token = create_refresh_token(
+                identity=user.id,
+                expires_delta=timedelta(days=7)
+            )
+            
+            # Armazenar novo refresh token
+            valid_refresh_tokens.add(new_refresh_token)
+            
             return jsonify({
-                'token': access_token,
+                'token': new_access_token,
+                'refresh_token': new_refresh_token,
+                'expires_in': 900,  # 15 minutos em segundos
                 'user': user.to_dict()
             }), 200
-        return jsonify({'error': 'Credenciais inválidas'}), 401
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/auth/logout', methods=['POST'])
+    @jwt_required()
+    def logout():
+        try:
+            # Obter refresh token do request
+            data = request.get_json() or {}
+            refresh_token = data.get('refresh_token')
+            
+            # Remover refresh token da lista de válidos
+            if refresh_token:
+                valid_refresh_tokens.discard(refresh_token)
+            
+            return jsonify({'message': 'Logout realizado com sucesso'}), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
 
     @app.route('/api/auth/register', methods=['POST'])
     def register():
@@ -283,12 +381,25 @@ def register_routes(app):
             db.session.add(new_user)
             db.session.commit()
             
-            # Gerar token para login automático
-            access_token = create_access_token(identity=new_user.id)
+            # Gerar tokens para login automático
+            access_token = create_access_token(
+                identity=new_user.id,
+                expires_delta=timedelta(minutes=15)
+            )
+            
+            refresh_token = create_refresh_token(
+                identity=new_user.id,
+                expires_delta=timedelta(days=7)
+            )
+            
+            # Armazenar refresh token
+            valid_refresh_tokens.add(refresh_token)
             
             return jsonify({
                 'message': 'Usuário registrado com sucesso',
                 'token': access_token,
+                'refresh_token': refresh_token,
+                'expires_in': 900,  # 15 minutos em segundos
                 'user': new_user.to_dict()
             }), 201
             
@@ -718,6 +829,8 @@ def register_routes(app):
                             selected_alternatives = [int(alt) for alt in parsed if alt is not None]
                         except:
                             selected_alternatives = []
+                    else:
+                        selected_alternatives = []
                 
                 points_for_question = float(exam_question.points)
                 
