@@ -2,6 +2,7 @@ import secrets
 from datetime import datetime, timedelta
 
 from database import db
+from decorators import on_exam_access, smart_update_expired_exams
 from flask import jsonify, request
 from flask_jwt_extended import (create_access_token, create_refresh_token,
                                 get_jwt, get_jwt_identity, jwt_required)
@@ -432,6 +433,7 @@ def register_routes(app):
     # Rotas de Provas
     @app.route('/api/exams', methods=['GET'])
     @jwt_required()
+    @smart_update_expired_exams(15)  # Verificar a cada 15 minutos
     def list_exams():
         try:
             user_id = get_jwt_identity()
@@ -490,6 +492,7 @@ def register_routes(app):
 
     @app.route('/api/exams/<int:exam_id>', methods=['GET'])
     @jwt_required()
+    @on_exam_access  # Verificar se esta prova específica expirou
     def get_exam(exam_id):
         try:
             exam = Exam.query.get_or_404(exam_id)
@@ -640,6 +643,7 @@ def register_routes(app):
     # Rotas de Realização de Provas
     @app.route('/api/exams/<int:exam_id>/enrollment-status', methods=['GET'])
     @jwt_required()
+    @on_exam_access  # Verificar se esta prova específica expirou
     def get_enrollment_status(exam_id):
         student_id = get_jwt_identity()
         
@@ -662,6 +666,7 @@ def register_routes(app):
 
     @app.route('/api/exams/<int:exam_id>/start', methods=['POST'])
     @jwt_required()
+    @on_exam_access  # CRÍTICO: Verificar se prova expirou antes de iniciar
     def start_exam(exam_id):
         student_id = get_jwt_identity()
         
@@ -1746,6 +1751,7 @@ def register_routes(app):
 
     @app.route('/api/student/exams', methods=['GET'])
     @jwt_required()
+    @smart_update_expired_exams(10)  # Verificar a cada 10 minutos para estudantes
     def get_student_exams():
         """Obter provas disponíveis para o estudante"""
         try:
@@ -2715,7 +2721,31 @@ def register_routes(app):
     # Rota de Healthcheck
     @app.route('/api/test', methods=['GET'])
     def api_test():
-        return jsonify({'status': 'healthy'}), 200 
+        return jsonify({'status': 'healthy'}), 200
+
+    # Rota administrativa para atualizar provas expiradas
+    @app.route('/api/admin/update-expired-exams', methods=['POST'])
+    @jwt_required()
+    def manual_update_expired_exams():
+        """Rota administrativa para atualizar manualmente provas expiradas"""
+        try:
+            user_id = get_jwt_identity()
+            user = User.query.get_or_404(user_id)
+            
+            # Apenas administradores e professores podem executar
+            if user.role not in ['admin', 'teacher']:
+                return jsonify({'error': 'Acesso negado'}), 403
+            
+            updated_count = update_expired_exams()
+            
+            return jsonify({
+                'message': f'Atualização concluída. {updated_count} provas foram atualizadas.',
+                'updated_count': updated_count,
+                'timestamp': datetime.utcnow().isoformat()
+            }), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 422 
 
     @app.route('/api/monitoring/exam-stats/<int:exam_id>', methods=['GET'])
     @jwt_required()
@@ -2911,3 +2941,29 @@ def register_routes(app):
             
         except Exception as e:
             return jsonify({'error': str(e)}), 422
+
+def update_expired_exams():
+    """Atualizar status das provas que passaram do prazo"""
+    try:
+        now = datetime.utcnow()
+        
+        # Buscar provas publicadas que já passaram do prazo
+        expired_exams = Exam.query.filter(
+            Exam.status == 'published',
+            Exam.end_time < now
+        ).all()
+        
+        updated_count = 0
+        for exam in expired_exams:
+            exam.status = 'finished'
+            updated_count += 1
+        
+        if updated_count > 0:
+            db.session.commit()
+            print(f"✓ Atualizados {updated_count} provas expiradas para status 'finished'")
+        
+        return updated_count
+    except Exception as e:
+        print(f"⚠️ Erro ao atualizar provas expiradas: {e}")
+        db.session.rollback()
+        return 0
