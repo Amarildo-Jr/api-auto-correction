@@ -481,7 +481,8 @@ def register_routes(app):
                 start_time=start_time,
                 end_time=end_time,
                 created_by=get_jwt_identity(),
-                class_id=data.get('class_id')
+                class_id=data.get('class_id'),
+                status=data.get('status', 'draft')  # Padrão: rascunho
             )
             db.session.add(new_exam)
             db.session.commit()
@@ -589,6 +590,8 @@ def register_routes(app):
                 exam.duration_minutes = data['duration_minutes']
             if 'class_id' in data:
                 exam.class_id = data['class_id']
+            if 'status' in data:
+                exam.status = data['status']
             
             # Atualizar datas se fornecidas
             if 'start_time' in data:
