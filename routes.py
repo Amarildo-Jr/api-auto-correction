@@ -485,7 +485,55 @@ def register_routes(app):
             )
             db.session.add(new_exam)
             db.session.commit()
-            return jsonify(new_exam.to_dict()), 201
+            
+            # Adicionar questões se fornecidas
+            if 'questions' in data and data['questions']:
+                questions_data = data['questions']
+                question_points = data.get('question_points', {})
+                
+                for i, question_id in enumerate(questions_data):
+                    question = Question.query.get(question_id)
+                    if question:
+                        # Criar snapshot da questão
+                        question_snapshot = {
+                            'question_text': question.question_text,
+                            'question_type': question.question_type,
+                            'alternatives': [alt.to_dict() for alt in question.alternatives]
+                        }
+                        
+                        # Usar pontuação personalizada ou padrão
+                        points = question_points.get(str(question_id), question.points)
+                        
+                        exam_question = ExamQuestion(
+                            exam_id=new_exam.id,
+                            question_id=question_id,
+                            points=points,
+                            order_number=i + 1,
+                            question_snapshot=question_snapshot
+                        )
+                        db.session.add(exam_question)
+                
+                db.session.commit()
+            
+            # Retornar prova criada com questões
+            exam_dict = new_exam.to_dict()
+            if 'questions' in data and data['questions']:
+                exam_questions = db.session.query(ExamQuestion, Question)\
+                    .join(Question, ExamQuestion.question_id == Question.id)\
+                    .filter(ExamQuestion.exam_id == new_exam.id)\
+                    .order_by(ExamQuestion.order_number)\
+                    .all()
+                
+                questions_data = []
+                for exam_question, question in exam_questions:
+                    question_dict = question.to_dict()
+                    question_dict['points'] = float(exam_question.points)
+                    question_dict['order_number'] = exam_question.order_number
+                    questions_data.append(question_dict)
+                
+                exam_dict['questions'] = questions_data
+            
+            return jsonify(exam_dict), 201
             
         except Exception as e:
             return jsonify({'error': str(e)}), 422
