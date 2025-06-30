@@ -604,15 +604,26 @@ def register_routes(app):
             if 'end_time' in data:
                 end_time_str = data['end_time']
                 if 'T' in end_time_str and '+' not in end_time_str and 'Z' not in end_time_str:
+                    # Data/hora local sem timezone - tratar como UTC para consistência
                     exam.end_time = datetime.fromisoformat(end_time_str)
                 else:
                     exam.end_time = datetime.fromisoformat(end_time_str.replace('Z', '+00:00'))
                 
                 # Verificar se a prova finalizada deve voltar a ser publicada
                 now = datetime.utcnow()
-                if exam.status == 'finished' and exam.end_time > now:
+                
+                # Garantir comparação consistente - ambas as datas devem ser naive ou ambas com timezone
+                if exam.end_time.tzinfo is None:
+                    # Se end_time é naive, comparar com horário naive também
+                    now_for_comparison = datetime.now()
+                else:
+                    # Se end_time tem timezone, usar UTC
+                    now_for_comparison = now
+                
+                if exam.status == 'finished' and exam.end_time > now_for_comparison:
                     exam.status = 'published'
                     print(f"INFO: Prova ID {exam_id} teve status alterado de 'finished' para 'published' devido à extensão do prazo")
+                    print(f"INFO: end_time: {exam.end_time}, now: {now_for_comparison}")
             
             # Gerenciar questões se fornecidas
             if 'questions' in data and 'question_points' in data:
