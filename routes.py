@@ -607,6 +607,12 @@ def register_routes(app):
                     exam.end_time = datetime.fromisoformat(end_time_str)
                 else:
                     exam.end_time = datetime.fromisoformat(end_time_str.replace('Z', '+00:00'))
+                
+                # Verificar se a prova finalizada deve voltar a ser publicada
+                now = datetime.utcnow()
+                if exam.status == 'finished' and exam.end_time > now:
+                    exam.status = 'published'
+                    print(f"INFO: Prova ID {exam_id} teve status alterado de 'finished' para 'published' devido à extensão do prazo")
             
             # Gerenciar questões se fornecidas
             if 'questions' in data and 'question_points' in data:
