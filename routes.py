@@ -236,6 +236,28 @@ def notify_new_enrollment_request(class_enrollment):
     )
 
 
+def notify_pending_corrections(enrollment, pending_count):
+    """Notificar professor quando há questões pendentes para correção"""
+    exam = Exam.query.get(enrollment.exam_id)
+    student = User.query.get(enrollment.student_id)
+    
+    create_notification(
+        user_id=exam.created_by,
+        notification_type='pending_corrections',
+        title='Questões Pendentes de Correção',
+        message=f'{student.name} finalizou a prova "{exam.title}" com {pending_count} questão(ões) pendente(s) de correção',
+        data={
+            'exam_id': exam.id,
+            'student_id': student.id,
+            'student_name': student.name,
+            'enrollment_id': enrollment.id,
+            'pending_count': pending_count,
+            'completed_at': enrollment.completed_at.isoformat() if enrollment.completed_at else None
+        },
+        priority='high'
+    )
+
+
 def register_routes(app):
     # Rotas de Autenticação
     @app.route('/api/auth/login', methods=['POST'])
@@ -802,6 +824,20 @@ def register_routes(app):
                 db.session.add(new_answer)
             
             db.session.commit()
+            
+            # Verificar se há questões pendentes para correção
+            pending_answers = Answer.query.filter_by(
+                enrollment_id=enrollment_id,
+                correction_method='pending'
+            ).count()
+            
+            # Notificar professor apenas se há questões pendentes ou é importante
+            if pending_answers > 0:
+                notify_pending_corrections(enrollment, pending_answers)
+            
+            # Sempre notificar aluno sobre resultado disponível
+            notify_result_available(enrollment)
+            
             return jsonify({'message': 'Resposta salva com sucesso'}), 200
             
         except Exception as e:
@@ -918,6 +954,9 @@ def register_routes(app):
                     else:
                         answer.points_earned = 0.0
                         
+                    # Marcar como corrigida automaticamente
+                    answer.correction_method = 'auto'
+                        
                 elif question.question_type == 'multiple_choice':
                     # Para múltipla escolha, implementar pontuação baseada em acertos líquidos
                     correct_alternatives = Alternative.query.filter_by(question_id=question.id, is_correct=True).all()
@@ -944,9 +983,13 @@ def register_routes(app):
                             answer.points_earned = 0.0
                     else:
                         answer.points_earned = 0.0
+                    
+                    # Marcar como corrigida automaticamente
+                    answer.correction_method = 'auto'
                 else:
                     # Tipo de questão desconhecido
                     answer.points_earned = 0.0
+                    answer.correction_method = 'auto'
                 
                 # Somar pontos apenas das questões já corrigidas (objetivas)
                 if answer.points_earned is not None:
