@@ -923,6 +923,9 @@ def register_routes(app):
                                 answer.similarity_score = similarity_score
                                 answer.correction_method = 'auto'
                                 print(f"   - ✅ Correção automática: {points_earned} pontos (similaridade: {similarity_score})")
+
+                                # Adicionar os pontos ao total (dissertativa corrigida automaticamente)
+                                total_points += answer.points_earned
                             else:
                                 answer.points_earned = None  # Pendente de correção manual
                                 answer.correction_method = 'pending'
@@ -942,13 +945,13 @@ def register_routes(app):
                         answer.correction_method = 'pending'
                         print(f"   - ⏳ Condições não atendidas - ficou pendente")
                     
-                    # Se não foi corrigida automaticamente, não incluir na pontuação total
-                    if answer.points_earned is None:
-                        continue
+                    # Para questões dissertativas, pular o processamento de questões objetivas
+                    continue
                 
                 # Para questões objetivas, verificar se há resposta
                 if not answer.selected_alternatives:
                     answer.points_earned = 0.0
+                    answer.correction_method = 'auto'
                     continue
                 
                 # Garantir que selected_alternatives seja uma lista de inteiros
@@ -1016,7 +1019,7 @@ def register_routes(app):
                     answer.points_earned = 0.0
                     answer.correction_method = 'auto'
                 
-                # Somar pontos apenas das questões já corrigidas (objetivas)
+                # Somar pontos apenas das questões objetivas (dissertativas já foram somadas)
                 if answer.points_earned is not None:
                     total_points += answer.points_earned
             
