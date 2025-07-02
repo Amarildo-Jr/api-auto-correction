@@ -152,6 +152,19 @@ def notify_result_available(enrollment):
     """Notificar quando resultado estiver disponível"""
     exam = Exam.query.get(enrollment.exam_id)
     
+    # Verificar se já existe uma notificação similar recente (últimas 2 horas)
+    recent_cutoff = datetime.utcnow() - timedelta(hours=2)
+    existing_notification = Notification.query.filter(
+        Notification.user_id == enrollment.student_id,
+        Notification.type == 'result_available',
+        Notification.data['enrollment_id'].astext == str(enrollment.id),
+        Notification.created_at >= recent_cutoff
+    ).first()
+    
+    if existing_notification:
+        print(f"⚠️ Notificação duplicada evitada: resultado já notificado para enrollment {enrollment.id}")
+        return
+    
     create_notification(
         user_id=enrollment.student_id,
         notification_type='result_available',
@@ -198,6 +211,19 @@ def notify_exam_completed(enrollment):
     """Notificar professor quando aluno terminar prova"""
     exam = Exam.query.get(enrollment.exam_id)
     student = User.query.get(enrollment.student_id)
+    
+    # Verificar se já existe uma notificação similar recente (últimas 2 horas)
+    recent_cutoff = datetime.utcnow() - timedelta(hours=2)
+    existing_notification = Notification.query.filter(
+        Notification.user_id == exam.created_by,
+        Notification.type == 'exam_completed',
+        Notification.data['enrollment_id'].astext == str(enrollment.id),
+        Notification.created_at >= recent_cutoff
+    ).first()
+    
+    if existing_notification:
+        print(f"⚠️ Notificação duplicada evitada: conclusão já notificada para enrollment {enrollment.id}")
+        return
     
     create_notification(
         user_id=exam.created_by,
@@ -634,18 +660,18 @@ def register_routes(app):
                 # Verificar se a prova finalizada deve voltar a ser publicada
                 now = datetime.utcnow()
                 
-                # Garantir comparação consistente - ambas as datas devem ser naive ou ambas com timezone
-                if exam.end_time.tzinfo is None:
-                    # Se end_time é naive, comparar com horário naive também
-                    now_for_comparison = datetime.now()
-                else:
-                    # Se end_time tem timezone, usar UTC
-                    now_for_comparison = now
+                # Converter end_time para UTC se necessário para comparação consistente
+                exam_end_time = exam.end_time
+                if exam_end_time.tzinfo is not None:
+                    # Se tem timezone, converter para UTC
+                    import calendar
+                    exam_end_time = exam_end_time.utctimetuple()
+                    exam_end_time = datetime.fromtimestamp(calendar.timegm(exam_end_time))
                 
-                if exam.status == 'finished' and exam.end_time > now_for_comparison:
+                if exam.status == 'finished' and exam_end_time > now:
                     exam.status = 'published'
                     print(f"INFO: Prova ID {exam_id} teve status alterado de 'finished' para 'published' devido à extensão do prazo")
-                    print(f"INFO: end_time: {exam.end_time}, now: {now_for_comparison}")
+                    print(f"INFO: end_time (UTC): {exam_end_time}, now (UTC): {now}")
             
             # Gerenciar questões se fornecidas
             if 'questions' in data and 'question_points' in data:
@@ -831,12 +857,11 @@ def register_routes(app):
                 correction_method='pending'
             ).count()
             
-            # Notificar professor apenas se há questões pendentes ou é importante
+            # Notificar professor apenas se há questões pendentes
             if pending_answers > 0:
                 notify_pending_corrections(enrollment, pending_answers)
             
-            # Sempre notificar aluno sobre resultado disponível
-            notify_result_available(enrollment)
+            # ❌ REMOVIDO: Não notificar sobre resultado aqui - só quando finalizar a prova
             
             return jsonify({'message': 'Resposta salva com sucesso'}), 200
             
@@ -3076,6 +3101,29 @@ def register_routes(app):
         except Exception as e:
             return jsonify({'error': str(e)}), 422
 
+    @app.route('/api/notifications/delete-all', methods=['DELETE'])
+    @jwt_required()
+    def delete_all_notifications():
+        """Excluir todas as notificações do usuário"""
+        try:
+            user_id = get_jwt_identity()
+            
+            # Buscar todas as notificações do usuário
+            notifications = Notification.query.filter_by(user_id=user_id).all()
+            
+            # Excluir todas
+            for notification in notifications:
+                db.session.delete(notification)
+            
+            db.session.commit()
+            
+            return jsonify({
+                'message': f'{len(notifications)} notificações excluídas com sucesso'
+            }), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 422
+
     @app.route('/api/teacher/auto-correct-single', methods=['POST'])
     @jwt_required()
     def auto_correct_single_answer():
@@ -3353,6 +3401,180 @@ def register_routes(app):
             return jsonify({
                 'message': 'Recorreção completa concluída com sucesso',
                 'updated_count': updated_count,
+                'essay_corrected': essay_corrected,
+                'objective_corrected': objective_corrected
+            }), 200
+            
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'error': str(e)}), 422
+
+    @app.route('/api/teacher/results/recorrect-enrollment', methods=['POST'])
+    @jwt_required()
+    def recorrect_single_enrollment():
+        """Recorrigir uma prova específica de um aluno (enrollment)"""
+        try:
+            user_id = get_jwt_identity()
+            user = User.query.get_or_404(user_id)
+            
+            if user.role not in ['professor', 'admin']:
+                return jsonify({'error': 'Apenas professores podem fazer recorreção'}), 403
+            
+            data = request.get_json()
+            enrollment_id = data.get('enrollment_id')
+            
+            if not enrollment_id:
+                return jsonify({'error': 'ID da matrícula é obrigatório'}), 400
+            
+            # Buscar enrollment e verificar permissão
+            enrollment = ExamEnrollment.query.get_or_404(enrollment_id)
+            exam = Exam.query.get_or_404(enrollment.exam_id)
+            
+            if user.role != 'admin' and exam.created_by != int(user_id):
+                return jsonify({'error': 'Sem permissão para esta prova'}), 403
+            
+            if enrollment.status != 'completed':
+                return jsonify({'error': 'Prova não foi finalizada'}), 400
+            
+            # Buscar todas as respostas desta matrícula
+            answers = Answer.query.filter_by(enrollment_id=enrollment_id).all()
+            
+            total_points = 0.0
+            essay_corrected = 0
+            objective_corrected = 0
+            
+            for answer in answers:
+                # Buscar questão e sua pontuação na prova
+                exam_question = ExamQuestion.query.filter_by(
+                    exam_id=enrollment.exam_id,
+                    question_id=answer.question_id
+                ).first()
+                
+                if not exam_question:
+                    answer.points_earned = 0.0
+                    continue
+                
+                question = Question.query.get(answer.question_id)
+                if not question:
+                    answer.points_earned = 0.0
+                    continue
+                
+                points_for_question = float(exam_question.points)
+                
+                # Questões dissertativas: correção automática se habilitada
+                if question.question_type == 'essay':
+                    if question.auto_correction_enabled and question.expected_answer and answer.answer_text:
+                        try:
+                            from auto_correction import auto_correction
+                            points_earned, similarity_score = auto_correction.auto_correct_essay(
+                                question.expected_answer,
+                                answer.answer_text,
+                                points_for_question
+                            )
+                            
+                            if points_earned is not None:
+                                answer.points_earned = points_earned
+                                answer.similarity_score = similarity_score
+                                answer.correction_method = 'auto'
+                                essay_corrected += 1
+                            else:
+                                # Se falhou, zerar e marcar como pendente
+                                answer.points_earned = 0.0
+                                answer.correction_method = 'pending'
+                        except Exception as e:
+                            print(f"Erro na correção automática: {e}")
+                            answer.points_earned = 0.0
+                            answer.correction_method = 'pending'
+                    else:
+                        # Dissertativa sem correção automática -> zerar e marcar como pendente
+                        answer.points_earned = 0.0
+                        answer.correction_method = 'pending'
+                
+                # Questões objetivas: corrigir baseado nas alternativas
+                else:
+                    objective_corrected += 1
+                    
+                    if not answer.selected_alternatives:
+                        answer.points_earned = 0.0
+                        answer.correction_method = 'auto'
+                        continue
+                    
+                    # Garantir que selected_alternatives seja uma lista de inteiros
+                    selected_alternatives = []
+                    if answer.selected_alternatives:
+                        if isinstance(answer.selected_alternatives, list):
+                            selected_alternatives = [int(alt) for alt in answer.selected_alternatives if alt is not None]
+                        elif isinstance(answer.selected_alternatives, str):
+                            try:
+                                import json
+                                parsed = json.loads(answer.selected_alternatives)
+                                selected_alternatives = [int(alt) for alt in parsed if alt is not None]
+                            except:
+                                selected_alternatives = []
+                    
+                    if question.question_type in ['single_choice', 'true_false']:
+                        # Para escolha única e V/F
+                        if len(selected_alternatives) == 1:
+                            alternative = Alternative.query.get(selected_alternatives[0])
+                            if alternative and alternative.is_correct:
+                                answer.points_earned = points_for_question
+                            else:
+                                answer.points_earned = 0.0
+                        else:
+                            answer.points_earned = 0.0
+                            
+                    elif question.question_type == 'multiple_choice':
+                        # Para múltipla escolha
+                        correct_alternatives = Alternative.query.filter_by(question_id=question.id, is_correct=True).all()
+                        correct_ids = {alt.id for alt in correct_alternatives}
+                        selected_ids = set(selected_alternatives)
+                        
+                        # Calcular acertos e erros
+                        correct_selected = len(correct_ids.intersection(selected_ids))
+                        incorrect_selected = len(selected_ids - correct_ids)
+                        total_correct = len(correct_ids)
+                        
+                        if total_correct > 0:
+                            net_correct = correct_selected - incorrect_selected
+                            if net_correct > 0:
+                                score_ratio = net_correct / total_correct
+                                answer.points_earned = points_for_question * score_ratio
+                            else:
+                                answer.points_earned = 0.0
+                        else:
+                            answer.points_earned = 0.0
+                    else:
+                        answer.points_earned = 0.0
+                    
+                    # Marcar como corrigida automaticamente
+                    answer.correction_method = 'auto'
+                
+                # Somar pontos apenas das questões corrigidas
+                if answer.points_earned is not None:
+                    total_points += answer.points_earned
+            
+            # Calcular pontuação máxima possível da prova
+            max_points_result = db.session.query(
+                db.func.sum(ExamQuestion.points)
+            ).filter(ExamQuestion.exam_id == enrollment.exam_id).scalar() or 0
+            
+            max_points = float(max_points_result) if max_points_result else 0.0
+            
+            # Calcular percentual
+            percentage = (total_points / max_points * 100) if max_points > 0 else 0.0
+            
+            # Atualizar enrollment
+            enrollment.total_points = total_points
+            enrollment.max_points = max_points
+            enrollment.percentage = percentage
+            
+            db.session.commit()
+            
+            return jsonify({
+                'message': 'Recorreção da prova concluída com sucesso',
+                'total_points': total_points,
+                'max_points': max_points,
+                'percentage': percentage,
                 'essay_corrected': essay_corrected,
                 'objective_corrected': objective_corrected
             }), 200

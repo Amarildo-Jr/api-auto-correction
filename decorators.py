@@ -1,3 +1,4 @@
+import calendar
 import logging
 from datetime import datetime
 from functools import wraps
@@ -138,15 +139,22 @@ def on_exam_access(f):
                 now = datetime.utcnow()
                 exam = Exam.query.get(exam_id)
                 
-                if exam:
+                if exam and exam.end_time:
+                    # Converter end_time para UTC se necessário para comparação consistente
+                    exam_end_time = exam.end_time
+                    if exam_end_time.tzinfo is not None:
+                        # Se tem timezone, converter para UTC
+                        exam_end_time = exam_end_time.utctimetuple()
+                        exam_end_time = datetime.fromtimestamp(calendar.timegm(exam_end_time))
+                    
                     # Verificar se prova published expirou
-                    if exam.status == 'published' and exam.end_time < now:
+                    if exam.status == 'published' and exam_end_time < now:
                         exam.status = 'finished'
                         db.session.commit()
                         logger.info(f"Prova ID {exam_id} atualizada para 'finished' no acesso")
                     
                     # Verificar se prova finished deveria voltar para published
-                    elif exam.status == 'finished' and exam.end_time > now:
+                    elif exam.status == 'finished' and exam_end_time > now:
                         exam.status = 'published'
                         db.session.commit()
                         logger.info(f"Prova ID {exam_id} atualizada para 'published' no acesso (reagendada)")
