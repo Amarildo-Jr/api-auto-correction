@@ -2536,7 +2536,11 @@ def register_routes(app):
                     
                     elif question.question_type == 'essay':
                         # Para questões dissertativas
-                        if recorrect_essays and question.auto_correction_enabled and question.expected_answer and answer.answer_text:
+                        if answer.correction_method == 'manual':
+                            # Manter correção manual existente
+                            if answer.points_earned is None:
+                                answer.points_earned = 0.0
+                        elif recorrect_essays and question.auto_correction_enabled and question.expected_answer and answer.answer_text:
                             # Tentar correção automática se solicitado
                             try:
                                 from auto_correction import auto_correction
@@ -2553,17 +2557,85 @@ def register_routes(app):
                                     answer.correction_method = 'auto'
                                     print(f"   - ✅ Recorreção automática: {points_earned} pontos")
                                 else:
-                                    # Se a correção automática falhar, manter valor atual ou zero
+                                    # Se a correção automática falhar, usar similaridade se disponível
+                                    if answer.similarity_score is not None:
+                                        similarity = answer.similarity_score
+                                        # Fórmula de pontuação baseada na similaridade
+                                        if similarity >= 90:
+                                            score_ratio = 1.0  # 100% dos pontos
+                                        elif similarity >= 80:
+                                            score_ratio = 0.85 + (similarity - 80) * 0.15 / 10  # 85-100%
+                                        elif similarity >= 70:
+                                            score_ratio = 0.70 + (similarity - 70) * 0.15 / 10  # 70-85%
+                                        elif similarity >= 60:
+                                            score_ratio = 0.60 + (similarity - 60) * 0.10 / 10  # 60-70%
+                                        elif similarity >= 40:
+                                            score_ratio = 0.30 + (similarity - 40) * 0.30 / 20  # 30-60%
+                                        elif similarity >= 20:
+                                            score_ratio = 0.10 + (similarity - 20) * 0.20 / 20  # 10-30%
+                                        else:
+                                            score_ratio = similarity / 20 * 0.10  # 0-10%
+                                        
+                                        answer.points_earned = points_for_question * score_ratio
+                                        answer.correction_method = 'auto'
+                                        print(f"   - 📊 Usando similaridade {similarity}%: {answer.points_earned} pontos")
+                                    else:
+                                        # Se não tem similaridade, manter valor atual ou zero
+                                        if answer.points_earned is None:
+                                            answer.points_earned = 0.0
+                                        print(f"   - ⏳ Recorreção retornou None, sem similaridade - mantida nota atual")
+                            except Exception as e:
+                                # Em caso de erro, tentar usar similaridade se disponível
+                                if answer.similarity_score is not None:
+                                    similarity = answer.similarity_score
+                                    # Fórmula de pontuação baseada na similaridade
+                                    if similarity >= 90:
+                                        score_ratio = 1.0
+                                    elif similarity >= 80:
+                                        score_ratio = 0.85 + (similarity - 80) * 0.15 / 10
+                                    elif similarity >= 70:
+                                        score_ratio = 0.70 + (similarity - 70) * 0.15 / 10
+                                    elif similarity >= 60:
+                                        score_ratio = 0.60 + (similarity - 60) * 0.10 / 10
+                                    elif similarity >= 40:
+                                        score_ratio = 0.30 + (similarity - 40) * 0.30 / 20
+                                    elif similarity >= 20:
+                                        score_ratio = 0.10 + (similarity - 20) * 0.20 / 20
+                                    else:
+                                        score_ratio = similarity / 20 * 0.10
+                                    
+                                    answer.points_earned = points_for_question * score_ratio
+                                    answer.correction_method = 'auto'
+                                    print(f"   - 📊 Erro na correção, usando similaridade {similarity}%: {answer.points_earned} pontos")
+                                else:
+                                    # Se não tem similaridade, manter valor atual ou zero
                                     if answer.points_earned is None:
                                         answer.points_earned = 0.0
-                                    print(f"   - ⏳ Recorreção retornou None - mantida nota atual")
-                            except Exception as e:
-                                # Em caso de erro, manter pontuação atual ou zero
-                                if answer.points_earned is None:
-                                    answer.points_earned = 0.0
-                                print(f"   - ❌ Erro na recorreção: {e}")
+                                    print(f"   - ❌ Erro na recorreção: {e}")
+                        elif answer.similarity_score is not None and answer.correction_method == 'pending':
+                            # Se tem similaridade e está pendente, usar similaridade para calcular pontos
+                            similarity = answer.similarity_score
+                            # Fórmula de pontuação baseada na similaridade
+                            if similarity >= 90:
+                                score_ratio = 1.0  # 100% dos pontos
+                            elif similarity >= 80:
+                                score_ratio = 0.85 + (similarity - 80) * 0.15 / 10  # 85-100%
+                            elif similarity >= 70:
+                                score_ratio = 0.70 + (similarity - 70) * 0.15 / 10  # 70-85%
+                            elif similarity >= 60:
+                                score_ratio = 0.60 + (similarity - 60) * 0.10 / 10  # 60-70%
+                            elif similarity >= 40:
+                                score_ratio = 0.30 + (similarity - 40) * 0.30 / 20  # 30-60%
+                            elif similarity >= 20:
+                                score_ratio = 0.10 + (similarity - 20) * 0.20 / 20  # 10-30%
+                            else:
+                                score_ratio = similarity / 20 * 0.10  # 0-10%
+                            
+                            answer.points_earned = points_for_question * score_ratio
+                            answer.correction_method = 'auto'
+                            print(f"   - 📊 Usando similaridade existente {similarity}%: {answer.points_earned} pontos")
                         else:
-                            # Manter pontuação manual para dissertativas
+                            # Manter pontuação manual para dissertativas ou zerar se não há
                             if answer.points_earned is None:
                                 answer.points_earned = 0.0
                     
@@ -3406,6 +3478,192 @@ def register_routes(app):
                 'updated_count': updated_count,
                 'essay_corrected': essay_corrected,
                 'objective_corrected': objective_corrected
+            }), 200
+            
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'error': str(e)}), 422
+
+    @app.route('/api/teacher/results/recalculate-single', methods=['POST'])
+    @jwt_required()
+    def recalculate_single_enrollment():
+        """Recalcular uma prova específica usando similaridade quando correção automática não disponível"""
+        try:
+            user_id = get_jwt_identity()
+            user = User.query.get_or_404(user_id)
+            
+            if user.role not in ['professor', 'admin']:
+                return jsonify({'error': 'Apenas professores podem recalcular'}), 403
+            
+            data = request.get_json()
+            enrollment_id = data.get('enrollment_id')
+            
+            if not enrollment_id:
+                return jsonify({'error': 'ID da matrícula é obrigatório'}), 400
+            
+            # Buscar enrollment e verificar permissão
+            enrollment = ExamEnrollment.query.get_or_404(enrollment_id)
+            exam = Exam.query.get_or_404(enrollment.exam_id)
+            
+            if user.role != 'admin' and exam.created_by != int(user_id):
+                return jsonify({'error': 'Sem permissão para esta prova'}), 403
+            
+            if enrollment.status != 'completed':
+                return jsonify({'error': 'Prova não foi finalizada'}), 400
+            
+            # Buscar todas as respostas desta matrícula
+            answers = Answer.query.filter_by(enrollment_id=enrollment_id).all()
+            
+            total_points = 0.0
+            recalculated_count = 0
+            similarity_used_count = 0
+            
+            for answer in answers:
+                # Buscar questão e sua pontuação na prova
+                exam_question = ExamQuestion.query.filter_by(
+                    exam_id=enrollment.exam_id,
+                    question_id=answer.question_id
+                ).first()
+                
+                if not exam_question:
+                    continue
+                
+                question = Question.query.get(answer.question_id)
+                if not question:
+                    continue
+                
+                points_for_question = float(exam_question.points)
+                
+                # Questões dissertativas: usar similaridade se manual e não há correção automática
+                if question.question_type == 'essay':
+                    # Se já está corrigida manualmente, manter correção
+                    if answer.correction_method == 'manual':
+                        # Manter pontuação manual
+                        pass
+                    elif answer.correction_method == 'pending' and answer.similarity_score is not None:
+                        # Usar similaridade existente para calcular pontos
+                        similarity = answer.similarity_score
+                        
+                        # Fórmula de pontuação baseada na similaridade
+                        if similarity >= 90:
+                            score_ratio = 1.0  # 100% dos pontos
+                        elif similarity >= 80:
+                            score_ratio = 0.85 + (similarity - 80) * 0.15 / 10  # 85-100%
+                        elif similarity >= 70:
+                            score_ratio = 0.70 + (similarity - 70) * 0.15 / 10  # 70-85%
+                        elif similarity >= 60:
+                            score_ratio = 0.60 + (similarity - 60) * 0.10 / 10  # 60-70%
+                        elif similarity >= 40:
+                            score_ratio = 0.30 + (similarity - 40) * 0.30 / 20  # 30-60%
+                        elif similarity >= 20:
+                            score_ratio = 0.10 + (similarity - 20) * 0.20 / 20  # 10-30%
+                        else:
+                            score_ratio = similarity / 20 * 0.10  # 0-10%
+                        
+                        new_points = points_for_question * score_ratio
+                        answer.points_earned = new_points
+                        answer.correction_method = 'auto'
+                        similarity_used_count += 1
+                        recalculated_count += 1
+                    elif answer.correction_method == 'auto' or answer.correction_method == 'pending':
+                        # Tentar correção automática se habilitada
+                        if question.auto_correction_enabled and question.expected_answer and answer.answer_text:
+                            try:
+                                from auto_correction import auto_correction
+                                points_earned, similarity_score = auto_correction.auto_correct_essay(
+                                    question.expected_answer,
+                                    answer.answer_text,
+                                    points_for_question
+                                )
+                                
+                                if points_earned is not None:
+                                    answer.points_earned = points_earned
+                                    answer.similarity_score = similarity_score
+                                    answer.correction_method = 'auto'
+                                    recalculated_count += 1
+                                else:
+                                    # Se falhou mas tem similaridade, usar ela
+                                    if answer.similarity_score is not None:
+                                        similarity = answer.similarity_score
+                                        # Usar fórmula de similaridade
+                                        if similarity >= 90:
+                                            score_ratio = 1.0
+                                        elif similarity >= 80:
+                                            score_ratio = 0.85 + (similarity - 80) * 0.15 / 10
+                                        elif similarity >= 70:
+                                            score_ratio = 0.70 + (similarity - 70) * 0.15 / 10
+                                        elif similarity >= 60:
+                                            score_ratio = 0.60 + (similarity - 60) * 0.10 / 10
+                                        elif similarity >= 40:
+                                            score_ratio = 0.30 + (similarity - 40) * 0.30 / 20
+                                        elif similarity >= 20:
+                                            score_ratio = 0.10 + (similarity - 20) * 0.20 / 20
+                                        else:
+                                            score_ratio = similarity / 20 * 0.10
+                                        
+                                        answer.points_earned = points_for_question * score_ratio
+                                        answer.correction_method = 'auto'
+                                        similarity_used_count += 1
+                                        recalculated_count += 1
+                            except Exception as e:
+                                print(f"Erro na correção automática: {e}")
+                                # Se tem similaridade, usar ela
+                                if answer.similarity_score is not None:
+                                    similarity = answer.similarity_score
+                                    # Usar fórmula de similaridade (repetindo por segurança)
+                                    if similarity >= 90:
+                                        score_ratio = 1.0
+                                    elif similarity >= 80:
+                                        score_ratio = 0.85 + (similarity - 80) * 0.15 / 10
+                                    elif similarity >= 70:
+                                        score_ratio = 0.70 + (similarity - 70) * 0.15 / 10
+                                    elif similarity >= 60:
+                                        score_ratio = 0.60 + (similarity - 60) * 0.10 / 10
+                                    elif similarity >= 40:
+                                        score_ratio = 0.30 + (similarity - 40) * 0.30 / 20
+                                    elif similarity >= 20:
+                                        score_ratio = 0.10 + (similarity - 20) * 0.20 / 20
+                                    else:
+                                        score_ratio = similarity / 20 * 0.10
+                                    
+                                    answer.points_earned = points_for_question * score_ratio
+                                    answer.correction_method = 'auto'
+                                    similarity_used_count += 1
+                                    recalculated_count += 1
+                
+                # Para questões objetivas - só recalcular se necessário  
+                elif question.question_type in ['single_choice', 'multiple_choice', 'true_false']:
+                    # Manter correção das objetivas (já estão corretas)
+                    pass
+                
+                # Somar pontos
+                if answer.points_earned is not None:
+                    total_points += answer.points_earned
+            
+            # Calcular pontuação máxima possível da prova
+            max_points_result = db.session.query(
+                db.func.sum(ExamQuestion.points)
+            ).filter(ExamQuestion.exam_id == enrollment.exam_id).scalar() or 0
+            
+            max_points = float(max_points_result) if max_points_result else 0.0
+            
+            # Calcular percentual
+            percentage = (total_points / max_points * 100) if max_points > 0 else 0.0
+            
+            # Atualizar enrollment
+            enrollment.total_points = total_points
+            enrollment.max_points = max_points
+            enrollment.percentage = percentage
+            
+            db.session.commit()
+            
+            return jsonify({
+                'message': 'Recálculo da prova concluído com sucesso',
+                'total_points': total_points,
+                'max_points': max_points,
+                'percentage': percentage,
+                'recalculated_count': recalculated_count,
+                'similarity_used_count': similarity_used_count
             }), 200
             
         except Exception as e:
