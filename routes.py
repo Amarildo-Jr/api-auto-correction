@@ -3984,36 +3984,18 @@ def register_routes(app):
         except Exception as e:
             return jsonify({'error': str(e)}), 422
 
-def update_expired_exams():
-    """Atualizar status das provas que passaram do prazo"""
-    try:
-        now = datetime.utcnow()
-        
-        # Buscar provas publicadas que já passaram do prazo
-        expired_exams = Exam.query.filter(
-            Exam.status == 'published',
-            Exam.end_time < now
-        ).all()
-        
-        updated_count = 0
-        for exam in expired_exams:
-            exam.status = 'finished'
-            updated_count += 1
-        
-        if updated_count > 0:
-            db.session.commit()
-            print(f"✓ Atualizados {updated_count} provas expiradas para status 'finished'")
-        
-        return updated_count
-    except Exception as e:
-        print(f"⚠️ Erro ao atualizar provas expiradas: {e}")
-        db.session.rollback()
-        return 0
-
-
     # =====================================================
     # ROTAS DE AVALIAÇÃO DA PLATAFORMA
     # =====================================================
+
+    @app.route('/api/platform-evaluation', methods=['OPTIONS'])
+    def platform_evaluation_options():
+        """Handle OPTIONS preflight request for platform-evaluation"""
+        response = jsonify({'status': 'OK'})
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        return response, 200
 
     @app.route('/api/platform-evaluation/check', methods=['GET'])
     @jwt_required()
@@ -4300,3 +4282,29 @@ def update_expired_exams():
             
         except Exception as e:
             return jsonify({'error': str(e)}), 500
+
+def update_expired_exams():
+    """Atualizar status das provas que passaram do prazo"""
+    try:
+        now = datetime.utcnow()
+        
+        # Buscar provas publicadas que já passaram do prazo
+        expired_exams = Exam.query.filter(
+            Exam.status == 'published',
+            Exam.end_time < now
+        ).all()
+        
+        updated_count = 0
+        for exam in expired_exams:
+            exam.status = 'finished'
+            updated_count += 1
+        
+        if updated_count > 0:
+            db.session.commit()
+            print(f"✓ Atualizados {updated_count} provas expiradas para status 'finished'")
+        
+        return updated_count
+    except Exception as e:
+        print(f"⚠️ Erro ao atualizar provas expiradas: {e}")
+        db.session.rollback()
+        return 0
