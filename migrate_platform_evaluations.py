@@ -8,7 +8,7 @@ import os
 import sys
 from datetime import datetime
 
-from config import Config
+# Config será importado dinamicamente baseado no ambiente
 from database import db
 from flask import Flask
 
@@ -16,7 +16,28 @@ from flask import Flask
 def create_app():
     """Criar aplicação Flask para migração"""
     app = Flask(__name__)
-    app.config.from_object(Config)
+    
+    # Determinar configuração baseada no ambiente
+    env = os.getenv('FLASK_ENV', 'development')
+    
+    if env == 'production':
+        from config import ProductionConfig
+        app.config.from_object(ProductionConfig)
+    else:
+        from config import DevelopmentConfig
+        app.config.from_object(DevelopmentConfig)
+    
+    # Verificar se DATABASE_URL foi configurada
+    database_url = app.config.get('SQLALCHEMY_DATABASE_URI')
+    if not database_url:
+        # Tentar variáveis de ambiente diretamente
+        database_url = os.getenv('DATABASE_URL')
+        if database_url:
+            app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+        else:
+            raise ValueError("DATABASE_URL não configurada!")
+    
+    print(f"📊 Configuração de banco: {database_url[:50]}...")
     
     # Inicializar banco de dados
     db.init_app(app)
