@@ -248,6 +248,19 @@ def apply_migrations():
         db.session.commit()
         print("🎉 Migrações v3 aplicadas com sucesso!")
         
+        # Executar migração de avaliações da plataforma
+        try:
+            print("🔄 Aplicando migração de avaliações da plataforma...")
+            import subprocess
+            result = subprocess.run(['python', 'migrate_platform_evaluations.py'], 
+                                  capture_output=True, text=True, cwd='.')
+            if result.returncode == 0:
+                print("✅ Migração de avaliações da plataforma aplicada com sucesso!")
+            else:
+                print(f"⚠️ Migração de avaliações falhou: {result.stderr}")
+        except Exception as migration_error:
+            print(f"⚠️ Erro ao executar migração de avaliações: {migration_error}")
+        
     except Exception as e:
         print(f"⚠️ Erro geral nas migrações: {e}")
         db.session.rollback()

@@ -40,8 +40,11 @@ else
   done
 fi
 
-echo "📊 Executando migrações..."
-python migrate.py || echo "⚠️ Migrações já executadas"
+echo "📊 Executando migrações principais..."
+python migrate.py || echo "⚠️ Migrações principais já executadas"
+
+echo "🔄 Executando migração de avaliações da plataforma..."
+python migrate_platform_evaluations.py || echo "⚠️ Migração de avaliações já executada"
 
 echo "🎯 Inicializando dados de exemplo..."
 python init_simple.py || echo "⚠️ Dados já inicializados"

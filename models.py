@@ -289,3 +289,179 @@ class Notification(db.Model):
             'created_at': self.created_at.isoformat(),
             'read_at': self.read_at.isoformat() if self.read_at else None
         } 
+
+class PlatformEvaluation(db.Model):
+    __tablename__ = 'platform_evaluations'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    
+    # Avaliações gerais (escala 1-5)
+    design_rating = db.Column(db.Integer, nullable=False)
+    colors_rating = db.Column(db.Integer, nullable=False)
+    layout_rating = db.Column(db.Integer, nullable=False)
+    responsiveness_rating = db.Column(db.Integer, nullable=False)
+    
+    # Navegação e Usabilidade
+    navigation_rating = db.Column(db.Integer, nullable=False)
+    menus_rating = db.Column(db.Integer, nullable=False)
+    loading_speed_rating = db.Column(db.Integer, nullable=False)
+    instructions_rating = db.Column(db.Integer, nullable=False)
+    
+    # Funcionalidades
+    registration_rating = db.Column(db.Integer, nullable=False)
+    login_rating = db.Column(db.Integer, nullable=False)
+    class_enrollment_rating = db.Column(db.Integer, nullable=False)
+    exam_taking_rating = db.Column(db.Integer, nullable=False)
+    results_rating = db.Column(db.Integer, nullable=False)
+    
+    # Experiência específica
+    registration_ease = db.Column(db.String(20), nullable=False)  # very_easy, easy, regular, difficult, very_difficult
+    registration_problems = db.Column(db.Text)
+    login_intuitive = db.Column(db.Boolean, nullable=False)
+    login_comments = db.Column(db.Text)
+    
+    # Navegação na turma
+    class_finding_easy = db.Column(db.Boolean, nullable=False)
+    class_finding_comments = db.Column(db.Text)
+    class_process_clear = db.Column(db.Boolean, nullable=False)
+    class_process_comments = db.Column(db.Text)
+    
+    # Realização da prova
+    exam_instructions_clear = db.Column(db.Boolean, nullable=False)
+    exam_instructions_comments = db.Column(db.Text)
+    timer_visible = db.Column(db.Boolean, nullable=False)
+    timer_comments = db.Column(db.Text)
+    question_navigation_easy = db.Column(db.Boolean, nullable=False)
+    question_navigation_comments = db.Column(db.Text)
+    answer_area_adequate = db.Column(db.Boolean, nullable=False)
+    answer_area_comments = db.Column(db.Text)
+    exam_finish_difficulty = db.Column(db.Boolean, nullable=False)
+    exam_finish_comments = db.Column(db.Text)
+    
+    # Resultados
+    results_clear = db.Column(db.Boolean, nullable=False)
+    results_comments = db.Column(db.Text)
+    essay_feedback_useful = db.Column(db.Boolean)
+    essay_feedback_comments = db.Column(db.Text)
+    
+    # Problemas encontrados
+    technical_errors = db.Column(db.Boolean, nullable=False)
+    technical_errors_description = db.Column(db.Text)
+    functionality_issues = db.Column(db.Boolean, nullable=False)
+    functionality_issues_description = db.Column(db.Text)
+    
+    # Dificuldades de uso
+    confusion_moments = db.Column(db.Boolean, nullable=False)
+    confusion_description = db.Column(db.Text)
+    missing_features = db.Column(db.Boolean, nullable=False)
+    missing_features_description = db.Column(db.Text)
+    
+    # Sugestões
+    platform_changes = db.Column(db.Text)
+    desired_features = db.Column(db.Text)
+    ux_suggestions = db.Column(db.Text)
+    
+    # Avaliação final
+    recommendation = db.Column(db.String(30), nullable=False)  # definitely_yes, probably_yes, maybe, probably_no, definitely_no
+    general_impression = db.Column(db.String(20), nullable=False)  # excellent, good, regular, bad, very_bad
+    additional_comments = db.Column(db.Text)
+    
+    # Informações técnicas
+    device_type = db.Column(db.String(20), nullable=False)  # desktop, tablet, smartphone
+    browser = db.Column(db.String(50), nullable=False)
+    operating_system = db.Column(db.String(50), nullable=False)
+    
+    # Metadados
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relacionamento com usuário
+    user = db.relationship('User', backref='platform_evaluations')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'user_name': self.user.name if self.user else None,
+            'user_role': self.user.role if self.user else None,
+            
+            # Avaliações gerais
+            'design_rating': self.design_rating,
+            'colors_rating': self.colors_rating,
+            'layout_rating': self.layout_rating,
+            'responsiveness_rating': self.responsiveness_rating,
+            
+            # Navegação e Usabilidade
+            'navigation_rating': self.navigation_rating,
+            'menus_rating': self.menus_rating,
+            'loading_speed_rating': self.loading_speed_rating,
+            'instructions_rating': self.instructions_rating,
+            
+            # Funcionalidades
+            'registration_rating': self.registration_rating,
+            'login_rating': self.login_rating,
+            'class_enrollment_rating': self.class_enrollment_rating,
+            'exam_taking_rating': self.exam_taking_rating,
+            'results_rating': self.results_rating,
+            
+            # Experiência específica
+            'registration_ease': self.registration_ease,
+            'registration_problems': self.registration_problems,
+            'login_intuitive': self.login_intuitive,
+            'login_comments': self.login_comments,
+            
+            # Navegação na turma
+            'class_finding_easy': self.class_finding_easy,
+            'class_finding_comments': self.class_finding_comments,
+            'class_process_clear': self.class_process_clear,
+            'class_process_comments': self.class_process_comments,
+            
+            # Realização da prova
+            'exam_instructions_clear': self.exam_instructions_clear,
+            'exam_instructions_comments': self.exam_instructions_comments,
+            'timer_visible': self.timer_visible,
+            'timer_comments': self.timer_comments,
+            'question_navigation_easy': self.question_navigation_easy,
+            'question_navigation_comments': self.question_navigation_comments,
+            'answer_area_adequate': self.answer_area_adequate,
+            'answer_area_comments': self.answer_area_comments,
+            'exam_finish_difficulty': self.exam_finish_difficulty,
+            'exam_finish_comments': self.exam_finish_comments,
+            
+            # Resultados
+            'results_clear': self.results_clear,
+            'results_comments': self.results_comments,
+            'essay_feedback_useful': self.essay_feedback_useful,
+            'essay_feedback_comments': self.essay_feedback_comments,
+            
+            # Problemas
+            'technical_errors': self.technical_errors,
+            'technical_errors_description': self.technical_errors_description,
+            'functionality_issues': self.functionality_issues,
+            'functionality_issues_description': self.functionality_issues_description,
+            
+            # Dificuldades
+            'confusion_moments': self.confusion_moments,
+            'confusion_description': self.confusion_description,
+            'missing_features': self.missing_features,
+            'missing_features_description': self.missing_features_description,
+            
+            # Sugestões
+            'platform_changes': self.platform_changes,
+            'desired_features': self.desired_features,
+            'ux_suggestions': self.ux_suggestions,
+            
+            # Avaliação final
+            'recommendation': self.recommendation,
+            'general_impression': self.general_impression,
+            'additional_comments': self.additional_comments,
+            
+            # Informações técnicas
+            'device_type': self.device_type,
+            'browser': self.browser,
+            'operating_system': self.operating_system,
+            
+            'created_at': self.created_at.isoformat(),
+            'updated_at': self.updated_at.isoformat()
+        } 

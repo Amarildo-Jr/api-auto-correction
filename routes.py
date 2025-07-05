@@ -8,7 +8,7 @@ from flask_jwt_extended import (create_access_token, create_refresh_token,
                                 get_jwt, get_jwt_identity, jwt_required)
 from models import (Alternative, Answer, Class, ClassEnrollment, Exam,
                     ExamEnrollment, ExamQuestion, MonitoringEvent,
-                    Notification, Question, User)
+                    Notification, PlatformEvaluation, Question, User)
 from werkzeug.security import check_password_hash, generate_password_hash
 
 # Armazenar refresh tokens válidos (em produção, usar Redis)
@@ -946,7 +946,7 @@ def register_routes(app):
                         print(f"   - ⏳ Condições não atendidas - ficou pendente")
                     
                     # Para questões dissertativas, pular o processamento de questões objetivas
-                    continue
+                        continue
                 
                 # Para questões objetivas, verificar se há resposta
                 if not answer.selected_alternatives:
@@ -2273,13 +2273,13 @@ def register_routes(app):
             if enrollment:
                 # Buscar todas as respostas desta matrícula
                 all_answers = Answer.query.filter_by(enrollment_id=enrollment.id).all()
-                
+            
                 # Calcular pontuação total apenas das questões corrigidas
                 total_points = 0.0
                 for ans in all_answers:
                     if ans.points_earned is not None:
                         total_points += float(ans.points_earned)
-                
+            
                 # Calcular pontuação máxima possível
                 max_points_result = db.session.query(
                     db.func.sum(ExamQuestion.points)
@@ -2290,10 +2290,10 @@ def register_routes(app):
                 # Calcular percentual
                 percentage = (total_points / max_points_total * 100) if max_points_total > 0 else 0.0
                 
-                # Atualizar enrollment
-                enrollment.total_points = total_points
-                enrollment.max_points = max_points_total
-                enrollment.percentage = percentage
+            # Atualizar enrollment
+            enrollment.total_points = total_points
+            enrollment.max_points = max_points_total
+            enrollment.percentage = percentage
             
             db.session.commit()
             
@@ -2583,7 +2583,7 @@ def register_routes(app):
                                         # Se não tem similaridade, manter valor atual ou zero
                                         if answer.points_earned is None:
                                             answer.points_earned = 0.0
-                                        print(f"   - ⏳ Recorreção retornou None, sem similaridade - mantida nota atual")
+                                            print(f"   - ⏳ Recorreção retornou None, sem similaridade - mantida nota atual")
                             except Exception as e:
                                 # Em caso de erro, tentar usar similaridade se disponível
                                 if answer.similarity_score is not None:
@@ -2843,6 +2843,7 @@ def register_routes(app):
             
             return jsonify({
                 'id': enrollment.id,
+                'enrollment_id': enrollment.id,
                 'student_name': student.name,
                 'student_email': student.email,
                 'exam_title': exam.title,
@@ -2955,7 +2956,7 @@ def register_routes(app):
     # Rota de Healthcheck
     @app.route('/api/test', methods=['GET'])
     def api_test():
-        return jsonify({'status': 'healthy'}), 200
+        return jsonify({'status': 'healthy'}), 200 
 
     # Rota administrativa para atualizar provas expiradas
     @app.route('/api/admin/update-expired-exams', methods=['POST'])
@@ -4008,3 +4009,294 @@ def update_expired_exams():
         print(f"⚠️ Erro ao atualizar provas expiradas: {e}")
         db.session.rollback()
         return 0
+
+
+    # =====================================================
+    # ROTAS DE AVALIAÇÃO DA PLATAFORMA
+    # =====================================================
+
+    @app.route('/api/platform-evaluation/check', methods=['GET'])
+    @jwt_required()
+    def check_platform_evaluation():
+        """Verificar se o usuário já fez avaliação da plataforma"""
+        try:
+            user_id = get_jwt_identity()
+            
+            # Verificar se já existe avaliação para este usuário
+            evaluation = PlatformEvaluation.query.filter_by(user_id=user_id).first()
+            
+            return jsonify({
+                'has_evaluation': evaluation is not None,
+                'evaluation_id': evaluation.id if evaluation else None,
+                'created_at': evaluation.created_at.isoformat() if evaluation else None
+            }), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/platform-evaluation', methods=['POST'])
+    @jwt_required()
+    def create_platform_evaluation():
+        """Criar nova avaliação da plataforma"""
+        try:
+            user_id = get_jwt_identity()
+            data = request.get_json()
+            
+            # Verificar se já existe avaliação para este usuário
+            existing_evaluation = PlatformEvaluation.query.filter_by(user_id=user_id).first()
+            if existing_evaluation:
+                return jsonify({'error': 'Usuário já fez avaliação da plataforma'}), 400
+            
+            # Criar nova avaliação
+            evaluation = PlatformEvaluation(
+                user_id=user_id,
+                
+                # Avaliações gerais (escala 1-5)
+                design_rating=data.get('design_rating'),
+                colors_rating=data.get('colors_rating'),
+                layout_rating=data.get('layout_rating'),
+                responsiveness_rating=data.get('responsiveness_rating'),
+                
+                # Navegação e Usabilidade
+                navigation_rating=data.get('navigation_rating'),
+                menus_rating=data.get('menus_rating'),
+                loading_speed_rating=data.get('loading_speed_rating'),
+                instructions_rating=data.get('instructions_rating'),
+                
+                # Funcionalidades
+                registration_rating=data.get('registration_rating'),
+                login_rating=data.get('login_rating'),
+                class_enrollment_rating=data.get('class_enrollment_rating'),
+                exam_taking_rating=data.get('exam_taking_rating'),
+                results_rating=data.get('results_rating'),
+                
+                # Experiência específica
+                registration_ease=data.get('registration_ease'),
+                registration_problems=data.get('registration_problems'),
+                login_intuitive=data.get('login_intuitive'),
+                login_comments=data.get('login_comments'),
+                
+                # Navegação na turma
+                class_finding_easy=data.get('class_finding_easy'),
+                class_finding_comments=data.get('class_finding_comments'),
+                class_process_clear=data.get('class_process_clear'),
+                class_process_comments=data.get('class_process_comments'),
+                
+                # Realização da prova
+                exam_instructions_clear=data.get('exam_instructions_clear'),
+                exam_instructions_comments=data.get('exam_instructions_comments'),
+                timer_visible=data.get('timer_visible'),
+                timer_comments=data.get('timer_comments'),
+                question_navigation_easy=data.get('question_navigation_easy'),
+                question_navigation_comments=data.get('question_navigation_comments'),
+                answer_area_adequate=data.get('answer_area_adequate'),
+                answer_area_comments=data.get('answer_area_comments'),
+                exam_finish_difficulty=data.get('exam_finish_difficulty'),
+                exam_finish_comments=data.get('exam_finish_comments'),
+                
+                # Resultados
+                results_clear=data.get('results_clear'),
+                results_comments=data.get('results_comments'),
+                essay_feedback_useful=data.get('essay_feedback_useful'),
+                essay_feedback_comments=data.get('essay_feedback_comments'),
+                
+                # Problemas encontrados
+                technical_errors=data.get('technical_errors'),
+                technical_errors_description=data.get('technical_errors_description'),
+                functionality_issues=data.get('functionality_issues'),
+                functionality_issues_description=data.get('functionality_issues_description'),
+                
+                # Dificuldades de uso
+                confusion_moments=data.get('confusion_moments'),
+                confusion_description=data.get('confusion_description'),
+                missing_features=data.get('missing_features'),
+                missing_features_description=data.get('missing_features_description'),
+                
+                # Sugestões
+                platform_changes=data.get('platform_changes'),
+                desired_features=data.get('desired_features'),
+                ux_suggestions=data.get('ux_suggestions'),
+                
+                # Avaliação final
+                recommendation=data.get('recommendation'),
+                general_impression=data.get('general_impression'),
+                additional_comments=data.get('additional_comments'),
+                
+                # Informações técnicas
+                device_type=data.get('device_type'),
+                browser=data.get('browser'),
+                operating_system=data.get('operating_system')
+            )
+            
+            db.session.add(evaluation)
+            db.session.commit()
+            
+            return jsonify({
+                'message': 'Avaliação salva com sucesso',
+                'evaluation_id': evaluation.id
+            }), 201
+            
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/admin/platform-evaluations', methods=['GET'])
+    @jwt_required()
+    def list_platform_evaluations():
+        """Listar todas as avaliações da plataforma (admin)"""
+        try:
+            user_id = get_jwt_identity()
+            user = User.query.get_or_404(user_id)
+            
+            if user.role != 'admin':
+                return jsonify({'error': 'Apenas administradores podem acessar este recurso'}), 403
+            
+            # Parâmetros de paginação
+            page = request.args.get('page', 1, type=int)
+            per_page = request.args.get('per_page', 10, type=int)
+            
+            # Buscar avaliações com paginação
+            evaluations = PlatformEvaluation.query.order_by(
+                PlatformEvaluation.created_at.desc()
+            ).paginate(
+                page=page,
+                per_page=per_page,
+                error_out=False
+            )
+            
+            return jsonify({
+                'evaluations': [evaluation.to_dict() for evaluation in evaluations.items],
+                'pagination': {
+                    'total': evaluations.total,
+                    'pages': evaluations.pages,
+                    'current_page': evaluations.page,
+                    'per_page': evaluations.per_page,
+                    'has_prev': evaluations.has_prev,
+                    'has_next': evaluations.has_next
+                }
+            }), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/admin/platform-evaluations/stats', methods=['GET'])
+    @jwt_required()
+    def get_platform_evaluation_stats():
+        """Obter estatísticas das avaliações da plataforma (admin)"""
+        try:
+            user_id = get_jwt_identity()
+            user = User.query.get_or_404(user_id)
+            
+            if user.role != 'admin':
+                return jsonify({'error': 'Apenas administradores podem acessar este recurso'}), 403
+            
+            # Contar total de avaliações
+            total_evaluations = PlatformEvaluation.query.count()
+            
+            # Contar avaliações por tipo de usuário
+            user_roles = db.session.query(
+                User.role,
+                db.func.count(PlatformEvaluation.id).label('count')
+            ).join(PlatformEvaluation).group_by(User.role).all()
+            
+            # Calcular médias das avaliações gerais
+            rating_averages = db.session.query(
+                db.func.avg(PlatformEvaluation.design_rating).label('design_avg'),
+                db.func.avg(PlatformEvaluation.colors_rating).label('colors_avg'),
+                db.func.avg(PlatformEvaluation.layout_rating).label('layout_avg'),
+                db.func.avg(PlatformEvaluation.responsiveness_rating).label('responsiveness_avg'),
+                db.func.avg(PlatformEvaluation.navigation_rating).label('navigation_avg'),
+                db.func.avg(PlatformEvaluation.menus_rating).label('menus_avg'),
+                db.func.avg(PlatformEvaluation.loading_speed_rating).label('loading_speed_avg'),
+                db.func.avg(PlatformEvaluation.instructions_rating).label('instructions_avg'),
+                db.func.avg(PlatformEvaluation.registration_rating).label('registration_avg'),
+                db.func.avg(PlatformEvaluation.login_rating).label('login_avg'),
+                db.func.avg(PlatformEvaluation.class_enrollment_rating).label('class_enrollment_avg'),
+                db.func.avg(PlatformEvaluation.exam_taking_rating).label('exam_taking_avg'),
+                db.func.avg(PlatformEvaluation.results_rating).label('results_avg')
+            ).first()
+            
+            # Contar respostas por categoria
+            recommendation_counts = db.session.query(
+                PlatformEvaluation.recommendation,
+                db.func.count(PlatformEvaluation.id).label('count')
+            ).group_by(PlatformEvaluation.recommendation).all()
+            
+            general_impression_counts = db.session.query(
+                PlatformEvaluation.general_impression,
+                db.func.count(PlatformEvaluation.id).label('count')
+            ).group_by(PlatformEvaluation.general_impression).all()
+            
+            # Contar problemas reportados
+            technical_errors_count = PlatformEvaluation.query.filter_by(technical_errors=True).count()
+            functionality_issues_count = PlatformEvaluation.query.filter_by(functionality_issues=True).count()
+            confusion_moments_count = PlatformEvaluation.query.filter_by(confusion_moments=True).count()
+            missing_features_count = PlatformEvaluation.query.filter_by(missing_features=True).count()
+            
+            # Dispositivos mais usados
+            device_counts = db.session.query(
+                PlatformEvaluation.device_type,
+                db.func.count(PlatformEvaluation.id).label('count')
+            ).group_by(PlatformEvaluation.device_type).all()
+            
+            # Navegadores mais usados
+            browser_counts = db.session.query(
+                PlatformEvaluation.browser,
+                db.func.count(PlatformEvaluation.id).label('count')
+            ).group_by(PlatformEvaluation.browser).order_by(db.func.count(PlatformEvaluation.id).desc()).limit(5).all()
+            
+            return jsonify({
+                'total_evaluations': total_evaluations,
+                'user_roles': [{'role': role, 'count': count} for role, count in user_roles],
+                'rating_averages': {
+                    'design': float(rating_averages.design_avg) if rating_averages.design_avg else 0,
+                    'colors': float(rating_averages.colors_avg) if rating_averages.colors_avg else 0,
+                    'layout': float(rating_averages.layout_avg) if rating_averages.layout_avg else 0,
+                    'responsiveness': float(rating_averages.responsiveness_avg) if rating_averages.responsiveness_avg else 0,
+                    'navigation': float(rating_averages.navigation_avg) if rating_averages.navigation_avg else 0,
+                    'menus': float(rating_averages.menus_avg) if rating_averages.menus_avg else 0,
+                    'loading_speed': float(rating_averages.loading_speed_avg) if rating_averages.loading_speed_avg else 0,
+                    'instructions': float(rating_averages.instructions_avg) if rating_averages.instructions_avg else 0,
+                    'registration': float(rating_averages.registration_avg) if rating_averages.registration_avg else 0,
+                    'login': float(rating_averages.login_avg) if rating_averages.login_avg else 0,
+                    'class_enrollment': float(rating_averages.class_enrollment_avg) if rating_averages.class_enrollment_avg else 0,
+                    'exam_taking': float(rating_averages.exam_taking_avg) if rating_averages.exam_taking_avg else 0,
+                    'results': float(rating_averages.results_avg) if rating_averages.results_avg else 0
+                },
+                'recommendation_distribution': [{'recommendation': rec, 'count': count} for rec, count in recommendation_counts],
+                'general_impression_distribution': [{'impression': imp, 'count': count} for imp, count in general_impression_counts],
+                'problems_reported': {
+                    'technical_errors': technical_errors_count,
+                    'functionality_issues': functionality_issues_count,
+                    'confusion_moments': confusion_moments_count,
+                    'missing_features': missing_features_count
+                },
+                'device_distribution': [{'device': device, 'count': count} for device, count in device_counts],
+                'browser_distribution': [{'browser': browser, 'count': count} for browser, count in browser_counts]
+            }), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/admin/platform-evaluations/export', methods=['GET'])
+    @jwt_required()
+    def export_platform_evaluations():
+        """Exportar todas as avaliações da plataforma (admin)"""
+        try:
+            user_id = get_jwt_identity()
+            user = User.query.get_or_404(user_id)
+            
+            if user.role != 'admin':
+                return jsonify({'error': 'Apenas administradores podem acessar este recurso'}), 403
+            
+            # Buscar todas as avaliações
+            evaluations = PlatformEvaluation.query.order_by(PlatformEvaluation.created_at.desc()).all()
+            
+            return jsonify({
+                'evaluations': [evaluation.to_dict() for evaluation in evaluations],
+                'total': len(evaluations),
+                'exported_at': datetime.utcnow().isoformat()
+            }), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
