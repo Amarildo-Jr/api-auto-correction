@@ -4250,6 +4250,164 @@ def register_routes(app):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
+    @app.route('/api/admin/analytics/dashboard', methods=['GET'])
+    @token_required
+    def get_admin_analytics():
+        """Obter estatísticas avançadas para o dashboard administrativo"""
+        try:
+            current_user = get_current_user()
+            
+            if current_user.role != 'admin':
+                return jsonify({'error': 'Acesso negado'}), 403
+            
+            # Estatísticas gerais
+            total_exams = Exam.query.count()
+            total_students = User.query.filter_by(role='student').count()
+            total_teachers = User.query.filter_by(role='teacher').count()
+            total_questions = Question.query.count()
+            
+            # Estatísticas de correção automática
+            auto_corrected_answers = Answer.query.filter(
+                Answer.correction_method == 'auto',
+                Answer.similarity_score.isnot(None)
+            ).all()
+            
+            manual_corrected_answers = Answer.query.filter(
+                Answer.correction_method == 'manual'
+            ).all()
+            
+            # Distribuição de notas
+            enrollments_with_grades = ExamEnrollment.query.filter(
+                ExamEnrollment.status == 'completed',
+                ExamEnrollment.percentage.isnot(None)
+            ).all()
+            
+            grade_distribution = {
+                'A (90-100%)': 0,
+                'B (80-89%)': 0,
+                'C (70-79%)': 0,
+                'D (60-69%)': 0,
+                'F (0-59%)': 0
+            }
+            
+            for enrollment in enrollments_with_grades:
+                percentage = float(enrollment.percentage)
+                if percentage >= 90:
+                    grade_distribution['A (90-100%)'] += 1
+                elif percentage >= 80:
+                    grade_distribution['B (80-89%)'] += 1
+                elif percentage >= 70:
+                    grade_distribution['C (70-79%)'] += 1
+                elif percentage >= 60:
+                    grade_distribution['D (60-69%)'] += 1
+                else:
+                    grade_distribution['F (0-59%)'] += 1
+            
+            # Tipos de questão mais utilizados
+            question_types = db.session.query(
+                Question.question_type,
+                db.func.count(Question.id).label('count')
+            ).group_by(Question.question_type).all()
+            
+            # Correção automática vs manual
+            correction_stats = {
+                'auto_corrected': len(auto_corrected_answers),
+                'manual_corrected': len(manual_corrected_answers),
+                'pending_correction': Answer.query.filter(
+                    Answer.points_earned.is_(None),
+                    Answer.correction_method.is_(None)
+                ).count()
+            }
+            
+            # Precisão da correção automática
+            auto_precision = []
+            if auto_corrected_answers:
+                for answer in auto_corrected_answers:
+                    if answer.similarity_score:
+                        auto_precision.append(float(answer.similarity_score))
+            
+            avg_auto_precision = sum(auto_precision) / len(auto_precision) if auto_precision else 0
+            
+            # Uso ao longo do tempo (últimos 30 dias)
+            from datetime import datetime, timedelta
+            thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+            
+            daily_usage = db.session.query(
+                db.func.date(ExamEnrollment.created_at).label('date'),
+                db.func.count(ExamEnrollment.id).label('enrollments')
+            ).filter(
+                ExamEnrollment.created_at >= thirty_days_ago
+            ).group_by(db.func.date(ExamEnrollment.created_at)).all()
+            
+            # Eventos de monitoramento
+            monitoring_events = db.session.query(
+                MonitoringEvent.event_type,
+                db.func.count(MonitoringEvent.id).label('count')
+            ).group_by(MonitoringEvent.event_type).all()
+            
+            # Avaliações da plataforma (removendo responsividade)
+            platform_evaluations = PlatformEvaluation.query.all()
+            
+            if platform_evaluations:
+                # Calculando médias das avaliações (excluindo responsividade)
+                evaluation_averages = {
+                    'design_rating': sum(p.design_rating for p in platform_evaluations) / len(platform_evaluations),
+                    'colors_rating': sum(p.colors_rating for p in platform_evaluations) / len(platform_evaluations),
+                    'layout_rating': sum(p.layout_rating for p in platform_evaluations) / len(platform_evaluations),
+                    'navigation_rating': sum(p.navigation_rating for p in platform_evaluations) / len(platform_evaluations),
+                    'menus_rating': sum(p.menus_rating for p in platform_evaluations) / len(platform_evaluations),
+                    'loading_speed_rating': sum(p.loading_speed_rating for p in platform_evaluations) / len(platform_evaluations),
+                    'instructions_rating': sum(p.instructions_rating for p in platform_evaluations) / len(platform_evaluations),
+                    'registration_rating': sum(p.registration_rating for p in platform_evaluations) / len(platform_evaluations),
+                    'login_rating': sum(p.login_rating for p in platform_evaluations) / len(platform_evaluations),
+                    'class_enrollment_rating': sum(p.class_enrollment_rating for p in platform_evaluations) / len(platform_evaluations),
+                    'exam_taking_rating': sum(p.exam_taking_rating for p in platform_evaluations) / len(platform_evaluations),
+                    'results_rating': sum(p.results_rating for p in platform_evaluations) / len(platform_evaluations)
+                }
+            else:
+                evaluation_averages = {}
+            
+            # Estatísticas de tempo de prova
+            completed_exams = ExamEnrollment.query.filter(
+                ExamEnrollment.status == 'completed',
+                ExamEnrollment.start_time.isnot(None),
+                ExamEnrollment.end_time.isnot(None)
+            ).all()
+            
+            exam_durations = []
+            for enrollment in completed_exams:
+                duration = (enrollment.end_time - enrollment.start_time).total_seconds() / 60  # em minutos
+                exam_durations.append(duration)
+            
+            avg_exam_duration = sum(exam_durations) / len(exam_durations) if exam_durations else 0
+            
+            analytics_data = {
+                'general_stats': {
+                    'total_exams': total_exams,
+                    'total_students': total_students,
+                    'total_teachers': total_teachers,
+                    'total_questions': total_questions,
+                    'avg_auto_precision': round(avg_auto_precision, 2),
+                    'avg_exam_duration': round(avg_exam_duration, 2)
+                },
+                'grade_distribution': grade_distribution,
+                'question_types': [{'type': qt.question_type, 'count': qt.count} for qt in question_types],
+                'correction_stats': correction_stats,
+                'daily_usage': [{'date': str(du.date), 'enrollments': du.enrollments} for du in daily_usage],
+                'monitoring_events': [{'type': me.event_type, 'count': me.count} for me in monitoring_events],
+                'platform_evaluations': evaluation_averages,
+                'performance_metrics': {
+                    'completion_rate': round(len(enrollments_with_grades) / total_students * 100, 2) if total_students > 0 else 0,
+                    'auto_correction_rate': round(correction_stats['auto_corrected'] / (correction_stats['auto_corrected'] + correction_stats['manual_corrected']) * 100, 2) if (correction_stats['auto_corrected'] + correction_stats['manual_corrected']) > 0 else 0,
+                    'platform_satisfaction': round(sum(evaluation_averages.values()) / len(evaluation_averages), 2) if evaluation_averages else 0
+                }
+            }
+            
+            return jsonify(analytics_data), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
 def update_expired_exams():
     """Atualizar status das provas que passaram do prazo"""
     try:
