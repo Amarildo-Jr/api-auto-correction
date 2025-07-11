@@ -4251,11 +4251,12 @@ def register_routes(app):
             return jsonify({'error': str(e)}), 500
 
     @app.route('/api/admin/analytics/dashboard', methods=['GET'])
-    @token_required
+    @jwt_required()
     def get_admin_analytics():
         """Obter estatísticas avançadas para o dashboard administrativo"""
         try:
-            current_user = get_current_user()
+            user_id = get_jwt_identity()
+            current_user = User.query.get_or_404(user_id)
             
             if current_user.role != 'admin':
                 return jsonify({'error': 'Acesso negado'}), 403
