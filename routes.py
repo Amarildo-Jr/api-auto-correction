@@ -4364,9 +4364,47 @@ def register_routes(app):
                     'exam_taking_rating': sum(p.exam_taking_rating for p in platform_evaluations) / len(platform_evaluations),
                     'results_rating': sum(p.results_rating for p in platform_evaluations) / len(platform_evaluations)
                 }
+                
+                # Estatísticas de dificuldade percebida pelos usuários
+                difficulty_stats = {
+                    'registration_very_easy': sum(1 for p in platform_evaluations if p.registration_ease == 'very_easy'),
+                    'registration_easy': sum(1 for p in platform_evaluations if p.registration_ease == 'easy'),
+                    'registration_regular': sum(1 for p in platform_evaluations if p.registration_ease == 'regular'),
+                    'registration_difficult': sum(1 for p in platform_evaluations if p.registration_ease == 'difficult'),
+                    'registration_very_difficult': sum(1 for p in platform_evaluations if p.registration_ease == 'very_difficult')
+                }
+                
+                # Estatísticas de problemas encontrados
+                problem_stats = {
+                    'technical_errors': sum(1 for p in platform_evaluations if p.technical_errors),
+                    'functionality_issues': sum(1 for p in platform_evaluations if p.functionality_issues),
+                    'confusion_moments': sum(1 for p in platform_evaluations if p.confusion_moments),
+                    'missing_features': sum(1 for p in platform_evaluations if p.missing_features)
+                }
+                
+                # Estatísticas de recomendação
+                recommendation_stats = {
+                    'definitely_yes': sum(1 for p in platform_evaluations if p.recommendation == 'definitely_yes'),
+                    'probably_yes': sum(1 for p in platform_evaluations if p.recommendation == 'probably_yes'),
+                    'maybe': sum(1 for p in platform_evaluations if p.recommendation == 'maybe'),
+                    'probably_no': sum(1 for p in platform_evaluations if p.recommendation == 'probably_no'),
+                    'definitely_no': sum(1 for p in platform_evaluations if p.recommendation == 'definitely_no')
+                }
+                
+                # Estatísticas por dispositivo
+                device_stats = {
+                    'desktop': sum(1 for p in platform_evaluations if p.device_type == 'desktop'),
+                    'tablet': sum(1 for p in platform_evaluations if p.device_type == 'tablet'),
+                    'smartphone': sum(1 for p in platform_evaluations if p.device_type == 'smartphone')
+                }
+                
             else:
                 evaluation_averages = {}
-            
+                difficulty_stats = {}
+                problem_stats = {}
+                recommendation_stats = {}
+                device_stats = {}
+                
             # Estatísticas de tempo de prova
             completed_exams = ExamEnrollment.query.filter(
                 ExamEnrollment.status == 'completed',
@@ -4396,6 +4434,10 @@ def register_routes(app):
                 'daily_usage': [{'date': str(du.date), 'enrollments': du.enrollments} for du in daily_usage],
                 'monitoring_events': [{'type': me.event_type, 'count': me.count} for me in monitoring_events],
                 'platform_evaluations': evaluation_averages,
+                'user_difficulty_stats': difficulty_stats if platform_evaluations else {},
+                'problem_stats': problem_stats if platform_evaluations else {},
+                'recommendation_stats': recommendation_stats if platform_evaluations else {},
+                'device_stats': device_stats if platform_evaluations else {},
                 'performance_metrics': {
                     'completion_rate': round(len(enrollments_with_grades) / total_students * 100, 2) if total_students > 0 else 0,
                     'auto_correction_rate': round(correction_stats['auto_corrected'] / (correction_stats['auto_corrected'] + correction_stats['manual_corrected']) * 100, 2) if (correction_stats['auto_corrected'] + correction_stats['manual_corrected']) > 0 else 0,
@@ -4404,6 +4446,9 @@ def register_routes(app):
             }
             
             return jsonify(analytics_data), 200
+            
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
             
         except Exception as e:
             return jsonify({'error': str(e)}), 500
